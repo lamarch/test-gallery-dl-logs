@@ -7,78 +7,84 @@
 <link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
 <style>
 :root{
-  --bg:#0d1117;--panel:#161b22;--border:#30363d;--fg:#e6edf3;--muted:#8b949e;
-  --debug:#8b949e;--info:#58a6ff;--warning:#d29922;--error:#f85149;--ok:#3fb950;
+  --bg:#f8f9fa; --panel:#ffffff; --border:#dee2e6; --fg:#212529; --muted:#6c757d;
+  --blue:#0d6efd; --ok:#198754; --warning:#b45309; --error:#dc3545;
+  --debug:#6c757d;
 }
 *{box-sizing:border-box}
 body{margin:0;background:var(--bg);color:var(--fg);height:100vh;display:flex;flex-direction:column;
-  font:13px/1.5 ui-monospace,SFMono-Regular,Menlo,Consolas,"Liberation Mono",monospace}
-header{display:flex;flex-wrap:wrap;gap:8px;align-items:center;padding:8px 12px;
-  background:var(--panel);border-bottom:1px solid var(--border)}
-.title{font-weight:700;margin-right:6px}
+  font:14px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif}
+header{display:flex;flex-wrap:wrap;gap:8px;align-items:center;padding:8px 16px;
+  background:var(--panel);border-bottom:1px solid var(--border);box-shadow:0 1px 2px rgba(16,24,40,.06)}
+.title{font-weight:700;font-size:16px;margin-right:8px}
 .tabs{display:flex;gap:4px}
-.tabs button{border-radius:6px}
-.tabs button.active{background:rgba(31,111,235,.3);border-color:#1f6feb;color:var(--fg)}
-input[type=search]{background:var(--bg);border:1px solid var(--border);color:var(--fg);
-  border-radius:6px;padding:4px 8px;width:220px;font:inherit}
+.tabs button{border-radius:.375rem}
+.tabs button.active{background:var(--blue);border-color:var(--blue);color:#fff}
+input[type=search]{background:#fff;border:1px solid #ced4da;color:var(--fg);
+  border-radius:.375rem;padding:.375rem .75rem;width:220px;font:inherit}
 #search-count{color:var(--muted);font-size:12px}
-button{background:var(--bg);border:1px solid var(--border);color:var(--fg);border-radius:6px;
-  padding:4px 10px;cursor:pointer;font:inherit}
-button:hover{border-color:var(--muted)}
-button:disabled{opacity:.4;cursor:default}
-button.active{background:rgba(31,111,235,.25);border-color:#1f6feb}
+button{background:#fff;border:1px solid #ced4da;color:var(--fg);border-radius:.375rem;
+  padding:.375rem .75rem;cursor:pointer;font:inherit}
+button:hover{background:#f1f3f5;border-color:#adb5bd}
+button:disabled{opacity:.5;cursor:default}
+button.active{background:#e7f1ff;border-color:var(--blue);color:var(--blue)}
 label.lvl{display:flex;gap:4px;align-items:center;color:var(--muted);font-size:12px;cursor:pointer;user-select:none}
 #stats{margin-left:auto;display:flex;gap:10px;align-items:center;color:var(--muted);font-size:12px;flex-wrap:wrap}
 #stats b{color:var(--fg)}
 #st-path{max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-#dot{width:9px;height:9px;border-radius:50%;background:var(--error);display:inline-block}
+#dot{width:10px;height:10px;border-radius:50%;background:var(--error);display:inline-block}
 #dot.on{background:var(--ok)}
 #rej-banner{display:none;color:var(--error);font-weight:600;cursor:pointer;
-  padding:2px 8px;border:1px solid var(--error);border-radius:6px;font-size:12px}
-#rej-banner.active{background:rgba(248,81,73,.2)}
-#statusbar{display:flex;flex-wrap:wrap;gap:8px;padding:8px 12px;background:var(--panel);
+  padding:2px 10px;border:1px solid var(--error);border-radius:2rem;font-size:12px;background:#fff}
+#rej-banner.active{background:#f8d7da}
+#statusbar{display:flex;flex-wrap:wrap;gap:8px;padding:8px 16px;background:var(--panel);
   border-bottom:1px solid var(--border)}
-.chip{background:var(--bg);border:1px solid var(--border);border-radius:8px;
-  padding:5px 12px;font-size:13px;color:var(--muted)}
-.chip b{color:var(--fg);font-size:14px}
-.chip.ok{border-color:var(--ok)} .chip.warn{border-color:var(--warning)} .chip.err{border-color:var(--error)}
+.chip{background:#e9ecef;border:1px solid var(--border);border-radius:2rem;
+  padding:4px 12px;font-size:13px;color:#495057}
+.chip b{color:var(--fg)}
+.chip.ok{border-color:var(--ok);background:#d1e7dd;color:#0f5132}
+.chip.warn{border-color:#ffc107;background:#fff3cd;color:#664d03}
+.chip.err{border-color:var(--error);background:#f8d7da;color:#842029}
 .chip.clickable{cursor:pointer}
-#notice{display:none;padding:4px 12px;background:rgba(31,111,235,.15);color:var(--info);
-  border-bottom:1px solid var(--border);font-size:12px}
-#paused{display:none;padding:4px 12px;background:rgba(210,153,34,.15);color:var(--warning);
-  border-bottom:1px solid var(--border);font-size:12px}
-.view{flex:1;overflow-y:auto;display:none;padding:6px 12px}
+.chip.clickable:hover{border-color:var(--blue)}
+#notice{display:none;padding:6px 16px;background:#cff4fc;color:#055160;
+  border-bottom:1px solid var(--border);font-size:13px}
+#paused{display:none;padding:6px 16px;background:#fff3cd;color:#664d03;
+  border-bottom:1px solid var(--border);font-size:13px}
+.view{flex:1;overflow-y:auto;display:none;padding:12px 16px}
 .view.open{display:block}
-#log{padding:0}
-.line{white-space:pre-wrap;word-break:break-all;padding:0 12px}
-.line:hover{background:rgba(22,27,34,.6)}
-.line.debug{color:var(--debug)} .line.info{color:var(--info)} .line.warning{color:var(--warning)}
+#log{padding:0;font:12.5px/1.5 ui-monospace,SFMono-Regular,Menlo,Consolas,"Liberation Mono",monospace}
+.line{white-space:pre-wrap;word-break:break-all;padding:1px 12px}
+.line:hover{background:#e9ecef}
+.line.debug{color:var(--debug)} .line.info{color:#0a58ca} .line.warning{color:var(--warning)}
 .line.error{color:var(--error)} .line.download{color:var(--ok)}
-.line.rej{font-weight:600}
+.line.rej{font-weight:600;background:#f8d7da}
 .line.event .ts{color:var(--muted)} .line.event .icon{display:inline-block;width:1.8em}
 .line.hidden{display:none}
-a{color:var(--info);text-decoration:none}
+a{color:var(--blue);text-decoration:none}
 a:hover{text-decoration:underline}
 details{margin:2px 0}
-summary{cursor:pointer;padding:2px 6px;border-radius:4px}
-summary:hover{background:rgba(22,27,34,.6)}
-.badge{display:inline-block;padding:0 6px;border-radius:8px;font-size:11px;border:1px solid var(--border);color:var(--muted)}
-.badge.done{color:var(--ok);border-color:var(--ok)}
-.badge.banned,.badge.error{color:var(--error);border-color:var(--error)}
-.badge.incomplete{color:var(--warning);border-color:var(--warning)}
-.badge.retried{color:var(--info);border-color:var(--info)}.badge.downloaded{color:var(--ok);border-color:var(--ok)}.badge.on_disk_only{color:var(--info);border-color:var(--info)}.badge.missing_on_disk{color:var(--warning);border-color:var(--warning)}.badge.failed{color:var(--error);border-color:var(--error)}.badge.pending{color:var(--muted)}
+summary{cursor:pointer;padding:4px 8px;border-radius:.375rem;font-weight:500}
+summary:hover{background:#e9ecef}
+.badge{display:inline-block;padding:.15em .6em;border-radius:.375rem;font-size:11px;font-weight:600;border:1px solid transparent;white-space:nowrap}
+.badge.done,.badge.downloaded{color:#fff;background:var(--ok);border-color:var(--ok)}
+.badge.banned,.badge.error,.badge.failed{color:#fff;background:var(--error);border-color:var(--error)}
+.badge.incomplete,.badge.missing_on_disk{color:#664d03;background:#ffc107;border-color:#ffc107}
+.badge.retried,.badge.on_disk_only{color:#fff;background:var(--blue);border-color:var(--blue)}
+.badge.pending{color:#fff;background:#6c757d;border-color:#6c757d}
 .stat{color:var(--muted);font-size:12px}
 .stat b{color:var(--fg)}
-.tree-indent{margin-left:18px;border-left:1px solid var(--border);padding-left:8px}
-.photo-row{padding:1px 6px;border-radius:4px}
-.photo-row:hover{background:rgba(22,27,34,.6)}
-.thumb{width:56px;height:56px;object-fit:cover;border-radius:4px;border:1px solid var(--border);vertical-align:middle;margin-right:8px}
-.files-table{width:100%;border-collapse:collapse}
-.files-table td{padding:3px 8px;border-bottom:1px solid var(--border);vertical-align:middle}
-.controls{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-bottom:8px}
-select{background:var(--bg);border:1px solid var(--border);color:var(--fg);border-radius:6px;padding:4px 8px;font:inherit}
-.card{background:var(--panel);border:1px solid var(--border);border-radius:8px;padding:8px 12px;margin-bottom:8px}
-.card h3{margin:0 0 6px 0;font-size:14px}
+.tree-indent{margin-left:18px;border-left:2px solid var(--border);padding-left:10px}
+.photo-row{padding:2px 8px;border-radius:.375rem}
+.photo-row:hover{background:#e9ecef}
+.thumb{width:56px;height:56px;object-fit:cover;border-radius:.375rem;border:1px solid var(--border);vertical-align:middle;margin-right:8px}
+.files-table{width:100%;border-collapse:collapse;background:#fff;border:1px solid var(--border);border-radius:.5rem}
+.files-table td{padding:6px 10px;border-bottom:1px solid var(--border);vertical-align:middle;font-size:13px}
+.files-table tr:hover{background:#f1f3f5}
+.controls{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-bottom:10px}
+select{background:#fff;border:1px solid #ced4da;color:var(--fg);border-radius:.375rem;padding:.375rem .75rem;font:inherit}
+.card{background:var(--panel);border:1px solid var(--border);border-radius:.5rem;padding:12px 16px;margin-bottom:12px;box-shadow:0 1px 2px rgba(16,24,40,.05)}
+.card h3{margin:0 0 8px 0;font-size:16px}
 </style>
 </head>
 <body>
@@ -339,7 +345,7 @@ function showTab(name) {
   if (name === "files") loadFiles();
 }
 for (const t of ["log", "tree", "albums", "files"])
-  $("tab-" + t).addEventListener("click", () => showTab(t));
+  $("tab-" + t).addEventListener("click", () => goTab(t));
 
 // ---------------------------------------------------------------- tree view
 async function loadTree() {
@@ -348,21 +354,28 @@ async function loadTree() {
     renderTree(t);
   } catch (e) {}
 }
-function badge(txt, cls) { return '<span class="badge ' + cls + '">' + esc(txt) + "</span>"; }
+function badge(txt, cls, title) { return '<span class="badge ' + cls + '"' + (title ? ' title="' + esc(title) + '"' : "") + '>' + esc(txt) + "</span>"; }
 function statsLine(o) {
   const pn = o.photos_n != null ? o.photos_n : (o.photos || 0);  // overview entries use "photos"
-  return '<span class="stat">🖼 <b>' + pn + '</b> photos (log) · 📥 <b>' + o.files +
-    '</b> downloaded (log) · 💾 <b>' + humanSize(o.bytes) + '</b> · 💤 <b>' + o.sleeps.toFixed(1) +
-    's</b> sleep' +
-    (o.on_disk != null ? ' · 💽 <b>' + o.on_disk + '</b> on disk (disk)' : '') +
-    (o.missing_on_disk ? ' · ⚠ <b>' + o.missing_on_disk + '</b> missing' : '') +
-    (o.errors ? ' · ✖ <b>' + o.errors + '</b>' : '') +
-    (o.rejections ? ' · 🚫 <b>' + o.rejections + '</b>' : '') + "</span>";
+  return '<span class="stat">'
+    + '<span title="Pages photo vues dans les logs (lignes GET /photo/?fbid=…)">🖼 <b>' + pn + '</b> photos (log)</span> · '
+    + '<span title="Téléchargements effectifs vus dans les logs : réponses HTTP < 400 avec octets sur le CDN (fbcdn.net)">📥 <b>' + o.files + '</b> downloaded (log)</span> · '
+    + '<span title="Volume téléchargé (somme des octets des payloads CDN)">💾 <b>' + humanSize(o.bytes) + '</b></span> · '
+    + '<span title="Temps de sommeil cumulé (sleep-request / download / extractor…)">💤 <b>' + o.sleeps.toFixed(1) + 's</b> sleep</span>'
+    + (o.on_disk != null ? ' · <span title="Fichiers physiquement présents sur le disque (match par fbid), indépendamment des logs">💽 <b>' + o.on_disk + '</b> on disk (disk)</span>' : '')
+    + (o.missing_on_disk ? ' · <span title="Téléchargées selon les logs mais absentes du disque">⚠ <b>' + o.missing_on_disk + '</b> missing</span>' : '')
+    + (o.errors ? ' · <span title="Lignes [error]/[critical] dans les logs">✖ <b>' + o.errors + '</b></span>' : '')
+    + (o.rejections ? ' · <span title="Rejets anti-scraping détectés dans les logs (429/ban/captcha…)">🚫 <b>' + o.rejections + '</b></span>' : '')
+    + '</span>';
 }
 function stateLine(st) {
   if (!st) return "";
-  const order = [["downloaded", "💾"], ["on_disk_only", "📁"], ["missing_on_disk", "⚠️"], ["failed", "❌"], ["pending", "⏳"]];
-  return order.filter(([k]) => st[k]).map(([k, ic]) => ic + " " + badge(k, k) + " <b>" + st[k] + "</b>").join(" ");
+  const order = [["downloaded", "💾", "Téléchargée selon les logs ET présente sur le disque"],
+    ["on_disk_only", "📁", "Présente sur le disque sans ligne de téléchargement dans les logs (déjà existante / run précédent)"],
+    ["missing_on_disk", "⚠️", "Téléchargée selon les logs mais absente du disque"],
+    ["failed", "❌", "Erreur de téléchargement (anti-bot, HTTP…) et absente du disque"],
+    ["pending", "⏳", "Page vue, rien de téléchargé, pas sur disque"]];
+  return order.filter(([k]) => st[k]).map(([k, ic, ti]) => ic + " " + badge(k, k, ti) + " <b>" + st[k] + "</b>").join(" ");
 }
 function renderTree(t) {
   const el = $("view-tree");
@@ -490,10 +503,11 @@ function renderOverview(o) {
     card.id = "album-" + (a.set_id || encodeURIComponent(a.url));
     card.innerHTML = "<h3>📁 " + (a.name ? "<b>" + esc(a.name) + "</b> — " : "") +
       (a.link ? '<a href="' + esc(a.link) + '" target="_blank" rel="noopener">' + esc(trunc(a.url, 70)) + "</a>" : esc(trunc(a.url, 70))) +
+      ' <a class="anchor" href="#album=' + esc(a.set_id || a.url) + '" title="permalien (historique navigateur)">🔗</a>' +
       " " + badge(a.status, a.status) + (a.retried ? " " + badge("retried", "retried") : "") +
       (a.set_id ? ' <span class="stat">set=a.' + esc(a.set_id) + (a.vanity ? " · vanity=" + esc(a.vanity) : "") + "</span>" : "") +
       "</h3><div class='stat'>sessions: " + a.sessions.map(x => "#" + x).join(", ") +
-      " · " + statsLine(a) + (a.states ? ' · ' + stateLine(a.states) : "") + " · 💾 on disk: <b>" + a.on_disk + "</b> files" +
+      " · " + statsLine(a) + (a.states ? ' · ' + stateLine(a.states) : "") +
       (a.missing_on_disk ? " · ⚠ <b>" + a.missing_on_disk + "</b> missing on disk" : "") +
       (a.extra_on_disk ? " · ➕ <b>" + a.extra_on_disk + "</b> extra on disk" : "") +
       (a.end_reason ? " · end: " + esc(a.end_reason) : "") + "</div>";
@@ -519,16 +533,31 @@ function renderOverview(o) {
     }
     el.appendChild(card);
   }
-  applyAnchor();
+  const st = hashState();
+  if (st.album) setTimeout(() => scrollToAlbum(st.album), 30);
 }
-function applyAnchor() {
+function hashState() {
   const h = location.hash;
-  if (!h.startsWith("#album=")) return;
-  const key = decodeURIComponent(h.slice(7));
-  const card = $("album-" + CSS.escape(key)) || $("album-" + encodeURIComponent(key));
-  if (card) { card.scrollIntoView(); card.style.borderColor = "var(--info)"; }
+  if (h.startsWith("#album=")) return { tab: "albums", album: decodeURIComponent(h.slice(7)) };
+  if (["#log", "#tree", "#albums", "#files"].includes(h)) return { tab: h.slice(1), album: null };
+  return { tab: "log", album: null };
 }
-window.addEventListener("hashchange", applyAnchor);
+function scrollToAlbum(key) {
+  const card = $("album-" + CSS.escape(key)) || $("album-" + encodeURIComponent(key));
+  if (card) { card.scrollIntoView(); card.style.borderColor = "var(--blue)"; }
+}
+function applyHash() {  // used by popstate/hashchange: never pushes
+  const st = hashState();
+  showTab(st.tab);
+  if (st.album) setTimeout(() => scrollToAlbum(st.album), 60);
+}
+function goTab(name) {  // user action: pushes a history entry
+  showTab(name);
+  const h = "#" + name;
+  if (location.hash !== h) history.pushState({ tab: name }, "", h);
+}
+window.addEventListener("popstate", applyHash);
+window.addEventListener("hashchange", applyHash);
 
 // ---------------------------------------------------------------- files view
 let filesData = null;
@@ -693,14 +722,14 @@ async function poll() {
     if (st.exists) chips.push('<span class="chip">last activity <b>' + fmtEpoch(st.mtime) + "</b> (" + esc(TZ) + ")</span>");
     statusbar.innerHTML = chips.join("");
     const chipAlbum = $("chip-album");
-    if (chipAlbum) chipAlbum.addEventListener("click", () => { showTab("albums"); });
+    if (chipAlbum) chipAlbum.addEventListener("click", () => goTab("albums"));
   } catch (e) {}
   setTimeout(poll, 5000);
 }
 
 loadHistory();
 poll();
-applyAnchor();
+applyHash();
 </script>
 </body>
 </html>
