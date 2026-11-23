@@ -30,18 +30,19 @@ jobs:
       - uses: actions/checkout@v4
       - name: Build web-ui-logs image
         run: docker build -t web-ui-logs:ci ./web-ui-logs
-      - name: Validate compose.example.yml
+      - name: Validate compose.yml
         run: |
           pip install pyyaml
           python - <<'PY'
           import yaml
-          doc = yaml.safe_load(open("compose.example.yml"))
+          doc = yaml.safe_load(open("compose.yml"))
+          assert set(doc["services"]) == {"fb-dl", "webui"}, doc["services"].keys()
           svc = doc["services"]["webui"]
           assert "ports" not in svc, "webui must not publish ports"
           assert svc["build"] == "./web-ui-logs"
           assert "caddy" in svc["networks"]
           assert doc["networks"]["caddy"]["external"] is True
           assert svc["environment"]["LOG_FILE"] == "/downloads/logs/fb-dl.log"
-          print("compose.example.yml OK")
+          print("compose.yml OK")
           PY
-          docker compose -f compose.example.yml config --quiet && echo "docker compose config OK"
+          docker compose config --quiet && echo "docker compose config OK"
