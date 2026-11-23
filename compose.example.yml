@@ -12,6 +12,7 @@ services:
       LOG_FILE: /downloads/logs/fb-dl.log   # output.logfile.path from config/gallery-dl.conf
       ALBUMS_FILE: /config/albums.txt       # the -I input file
       MAX_RENDER_LINES: "20000"             # optional: browser DOM cap
+      # SCAN_MAX_BYTES: "268435456"         # optional: cap stats/search scan to the last 256 MiB (log grows unbounded in mode "a")
     volumes:
       - ./downloads-2:/downloads:ro         # same mount as fb-dl, read-only
       - ./config:/config:ro                 # contains cookies: keep it out of git

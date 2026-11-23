@@ -73,6 +73,7 @@ legacy non-interpolated lines (`[%(asctime)s][%(levelname)s] …`) are shown as 
 | `CHUNK_LINES` | `5000` | lines per chunk when reading history |
 | `MAX_RENDER_LINES` | `20000` | max lines kept in the browser DOM |
 | `TAIL_LINES` | `500` | default N for `/api/logs?tail=N` |
+| `SCAN_MAX_BYTES` | `0` (whole file) | if > 0, `/api/stats`, `/api/search` and album-start detection only scan the last N bytes of the log (`truncated: true` is reported) |
 
 ## API
 
@@ -90,8 +91,12 @@ legacy non-interpolated lines (`[%(asctime)s][%(levelname)s] …`) are shown as 
 
 ## Notes
 
-- With `mode: "a"` in gallery-dl.conf the log accumulates across runs — rotate or purge
-  `downloads-2/logs/fb-dl.log` from time to time (the app detects truncation/rotation).
+- With `mode: "a"` in gallery-dl.conf the log accumulates across runs with no rotation.
+  Browsing (`/api/logs`) always reads the whole file in chunks, but `/api/stats` and
+  `/api/search` scan it in one pass — on a very large file that gets slow. Either rotate
+  the file from time to time (logrotate with `copytruncate` works: the app detects the
+  truncation live) or set `SCAN_MAX_BYTES` to scan only the tail (e.g. `268435456` =
+  last 256 MiB; responses then carry `truncated: true`).
 - If you change `output.logfile.path` in `config/gallery-dl.conf`, update `LOG_FILE`
   in your compose.
 - `fb-dl` runs as `1000:1000`; the webui container (root) can read the log without issues.

@@ -39,6 +39,36 @@ REJECTION_RE = re.compile(
     r"|content isn't available"
 )
 
+# With SCAN_MAX_BYTES > 0, only the tail of the log file is scanned for
+# stats/search/album-start detection (0 = scan the whole file).
+SCAN_MAX_BYTES = int(os.environ.get("SCAN_MAX_BYTES", "0"))
+
+
+def _scan_range():
+    """Return (start_byte, size) of the log region scanned for stats/search."""
+    try:
+        size = os.path.getsize(LOG_FILE)
+    except OSError:
+        return 0, 0
+    if SCAN_MAX_BYTES > 0 and size > SCAN_MAX_BYTES:
+        return size - SCAN_MAX_BYTES, size
+    return 0, size
+
+
+def _iter_log_lines():
+    """Yield decoded lines of the scanned region of the log file."""
+    start, size = _scan_range()
+    if size == 0:
+        return
+    with open(LOG_FILE, "rb") as f:
+        f.seek(start)
+        data = f.read()
+    if start > 0:
+        nl = data.find(b"\n")
+        data = data[nl + 1:] if nl != -1 else b""
+    for line in data.decode("utf-8", "replace").splitlines():
+        yield line
+
 app = FastAPI(title="gallery-dl dashboard")
 
 
@@ -91,24 +121,27 @@ _search_cache = {"key": None, "value": None}
 def search(q: str = "", limit: int = Query(default=200, ge=1, le=2000)):
     """Search the whole log file (not just what is rendered)."""
     ql = q.strip().lower()
+    empty = {"q": q, "count": 0, "shown": 0, "lines": [],
+             "scanned_bytes": 0, "truncated": False}
     if not ql:
-        return {"q": q, "count": 0, "shown": 0, "lines": []}
+        return empty
     try:
         st = os.stat(LOG_FILE)
         key = (st.st_size, st.st_mtime_ns, ql)
     except OSError:
-        return {"q": q, "count": 0, "shown": 0, "lines": []}
+        return empty
     if _search_cache["key"] == key:
         return _search_cache["value"]
+    start, size = _scan_range()
     count = 0
     matches = []
-    with open(LOG_FILE, encoding="utf-8", errors="replace") as f:
-        for line in f:
-            if ql in line.lower():
-                count += 1
-                if len(matches) < limit:
-                    matches.append(line.rstrip("\n"))
-    value = {"q": q, "count": count, "shown": len(matches), "lines": matches}
+    for line in _iter_log_lines():
+        if ql in line.lower():
+            count += 1
+            if len(matches) < limit:
+                matches.append(line)
+    value = {"q": q, "count": count, "shown": len(matches), "lines": matches,
+             "scanned_bytes": size - start, "truncated": start > 0}
     _search_cache["key"] = key
     _search_cache["value"] = value
     return value
@@ -148,11 +181,10 @@ def _started_urls():
     if _started_cache["key"] == key:
         return _started_cache["value"]
     started = set()
-    with open(LOG_FILE, encoding="utf-8", errors="replace") as f:
-        for line in f:
-            m = STARTED_RE.search(line)
-            if m:
-                started.add(m.group(1))
+    for line in _iter_log_lines():
+        m = STARTED_RE.search(line)
+        if m:
+            started.add(m.group(1))
     _started_cache["key"] = key
     _started_cache["value"] = started
     return started
@@ -199,7 +231,8 @@ def status():
 _stats_cache = {"key": None, "value": None}
 
 _EMPTY_STATS = {"exists": False, "lines": 0, "errors": 0, "warnings": 0,
-                "downloads": 0, "skips": 0, "jobs": 0, "rejections": 0}
+                "downloads": 0, "skips": 0, "jobs": 0, "rejections": 0,
+                "scanned_bytes": 0, "truncated": False}
 
 
 @app.get("/api/stats")
@@ -213,30 +246,30 @@ def stats():
         return _stats_cache["value"]
     counts = {"lines": 0, "errors": 0, "warnings": 0,
               "downloads": 0, "skips": 0, "jobs": 0, "rejections": 0}
-    with open(LOG_FILE, encoding="utf-8", errors="replace") as f:
-        for raw_line in f:
-            line = raw_line.rstrip("\n")
-            if not line:
-                continue
-            counts["lines"] += 1
-            if REJECTION_RE.search(line):
-                counts["rejections"] += 1
-            m = LEVEL_RE.match(line)
-            if m:
-                level = m.group(1)
-                if level in ("error", "critical"):
-                    counts["errors"] += 1
-                elif level == "warning":
-                    counts["warnings"] += 1
-                if JOB_RE.search(line):
-                    counts["jobs"] += 1
-            elif line.startswith("# "):
-                counts["skips"] += 1
-            elif PROGRESS_RE.match(line):
-                pass
-            else:
-                counts["downloads"] += 1
-    value = {"exists": True, **counts}
+    start, size = _scan_range()
+    for line in _iter_log_lines():
+        if not line:
+            continue
+        counts["lines"] += 1
+        if REJECTION_RE.search(line):
+            counts["rejections"] += 1
+        m = LEVEL_RE.match(line)
+        if m:
+            level = m.group(1)
+            if level in ("error", "critical"):
+                counts["errors"] += 1
+            elif level == "warning":
+                counts["warnings"] += 1
+            if JOB_RE.search(line):
+                counts["jobs"] += 1
+        elif line.startswith("# "):
+            counts["skips"] += 1
+        elif PROGRESS_RE.match(line):
+            pass
+        else:
+            counts["downloads"] += 1
+    value = {"exists": True, **counts,
+             "scanned_bytes": size - start, "truncated": start > 0}
     _stats_cache["key"] = key
     _stats_cache["value"] = value
     return value
