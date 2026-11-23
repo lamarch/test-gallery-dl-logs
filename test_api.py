@@ -36,6 +36,9 @@ LINES = [
     '  File "/usr/lib/python3.12/site-packages/x.py", line 42, in <module>',  # traceback
     "[2026-11-23 10:00:00] [gallery-dl][debug] Sleeping 11.34 seconds (request)",
     f'[2026-11-23 10:00:01] [urllib3.connectionpool][debug] https://www.facebook.com:443 "GET /photo/?fbid=29493523083626912&set=a.{SET_ID} HTTP/1.1" 200 None',
+    # media served as .jpg directly by the CDN: 200 with bytes, NO "Adjusting" line
+    # -> must still count as 1 downloaded file
+    '[2026-11-23 10:00:02] [urllib3.connectionpool][debug] https://scontent-cdg4-2.xx.fbcdn.net:443 "GET /v/t39.30808-6/555_n.jpg HTTP/1.1" 200 54321',
     "[2026-11-23 10:00:03] [downloader.http][debug] Adjusting filename extension of '20250506_082802_29493523083626912.avif' to 'jpg'",
 ]
 with open(LOG_FILE, "w", encoding="utf-8") as f:
@@ -138,7 +141,8 @@ class ApiTests(unittest.TestCase):
         r = self.client.get("/api/logs", params={"before": size, "limit": 3})
         data = r.json()
         self.assertEqual(len(data["lines"]), 3)
-        self.assertIn("Sleeping 11.34", data["lines"][0])
+        self.assertIn("29493523083626912", data["lines"][0])  # last 3 lines of the fixture
+        self.assertIn("Adjusting filename", data["lines"][-1])
         self.assertTrue(data["has_more"])
         self.assertLess(data["start_offset"], size)
         r2 = self.client.get("/api/logs", params={"before": data["start_offset"], "limit": 100})
@@ -170,13 +174,15 @@ class ApiTests(unittest.TestCase):
     def test_stats_counts(self):
         data = self.client.get("/api/stats").json()
         self.assertTrue(data["exists"])
-        self.assertEqual(data["lines"], 18)
+        self.assertEqual(data["lines"], len(LINES))
         self.assertEqual(data["errors"], 2)
         self.assertEqual(data["warnings"], 0)
         self.assertEqual(data["jobs"], 2)
         self.assertEqual(data["downloads"], 1)   # legacy literal line only
         self.assertEqual(data["skips"], 0)
         self.assertEqual(data["rejections"], 1)  # NOT 2: [429/500] must not match
+        # files = media payloads downloaded from the CDN (2 fbcdn 200-with-bytes),
+        # NOT "Adjusting filename extension" lines (which only appear on avif->jpg)
         self.assertEqual(data["files"], 2)
         self.assertEqual(data["current_album"], SET_URL)
         self.assertEqual(data["current_album_files"], 1)
@@ -192,12 +198,12 @@ class ApiTests(unittest.TestCase):
             data = self.client.get("/api/stats").json()
             self.assertTrue(data["truncated"])
             self.assertEqual(data["scanned_bytes"], 60)
-            self.assertLess(data["lines"], 18)
+            self.assertLess(data["lines"], len(LINES))
         finally:
             app_module.SCAN_MAX_BYTES = old
             clear_caches()
         data = self.client.get("/api/stats").json()
-        self.assertEqual(data["lines"], 18)
+        self.assertEqual(data["lines"], len(LINES))
         self.assertFalse(data["truncated"])
 
     def test_status(self):
@@ -263,7 +269,13 @@ class TreeApiTests(unittest.TestCase):
         self.assertEqual(a1["rejections"], 1)
         self.assertEqual(a1["errors"], 2)
         self.assertEqual(a1["photos"][0]["status"], "failed")
+        # photo 1: downloaded via the CDN .jpg payload (200 + bytes), no Adjusting
+        # line needed; the later Adjusting line only sets the filename (no double count)
         self.assertEqual(a1["photos"][1]["status"], "downloaded")
+        self.assertEqual(a1["photos"][1]["bytes"], 54321)
+        self.assertEqual(a1["photos"][1]["file"], "20250506_082802_29493523083626912.avif")
+        self.assertEqual(a1["files"], 1)   # 1 CDN payload, not 2 "Adjusting" lines
+        self.assertEqual(a1["bytes"], 54321)
         self.assertEqual(s1["files"], 1)
 
     def test_album_detail_merges_disk(self):
@@ -356,14 +368,15 @@ class TreeApiTests(unittest.TestCase):
         self.assertEqual(sds[0]["photos_n"], 1)
         self.assertEqual(sds[0]["status"], "incomplete")
         self.assertEqual(sds[1]["photos_n"], 2)
+        self.assertEqual(sds[1]["files"], 1)
         self.assertEqual(sds[1]["status"], "banned")
         self.assertIn("session_start", sds[0])
         self.assertIn("start", sds[1])
         self.assertEqual(a["sessions"], [0, 1])
         self.assertTrue(a["retried"])
         self.assertEqual(a["photos"], 3)
-        self.assertEqual(a["files"], 2)
-        self.assertEqual(a["bytes"], 392546)
+        self.assertEqual(a["files"], 2)            # 2 CDN payloads (L6 + L18)
+        self.assertEqual(a["bytes"], 392546 + 54321)
         self.assertEqual(a["errors"], 2)
         self.assertEqual(a["rejections"], 1)
         self.assertEqual(a["on_disk"], 2)

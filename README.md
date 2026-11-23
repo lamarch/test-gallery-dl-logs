@@ -129,10 +129,12 @@ Log line format handled (verified against gallery-dl 1.32.21 output):
 legacy non-interpolated lines (`[%(asctime)s][%(levelname)s] …`) are shown as "other".
 
 **Photos vs files**: `photos_n` counts `"GET /photo/?fbid=…` lines = photo pages visited
-in the album; `files` counts `[downloader.http][debug] Adjusting filename extension of
-'…' to '…'` lines = files actually written to disk. They differ when a photo page was
-seen but not downloaded (failed download, anti-bot rejection, "already downloaded"
-skip) — and can differ the other way for multi-file posts.
+in the album. `files` counts **media payloads actually downloaded** — HTTP responses
+`< 400` with a byte count from the CDN (`fbcdn.net`), i.e. files really written to disk.
+Do NOT count `Adjusting filename extension of '…' to '…'` lines for this: they only
+appear when gallery-dl changes the extension (avif→jpg) and silently undercount when
+the CDN already serves `.jpg`. The two numbers still differ when a photo page was seen
+but not downloaded (failed download, anti-bot rejection, "already downloaded" skip).
 
 ## Environment variables (service `webui` in your compose)
 
