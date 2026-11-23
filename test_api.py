@@ -349,6 +349,16 @@ class TreeApiTests(unittest.TestCase):
         self.assertEqual(a["set_id"], SET_ID)
         # status recomputed from aggregated counters: the album saw a rejection
         self.assertEqual(a["status"], "banned")
+        # per-session details: one entry per session, with album_idx + photos
+        sds = {d["session"]: d for d in a["session_details"]}
+        self.assertEqual(sorted(sds), [0, 1])
+        self.assertEqual(sds[0]["album_idx"], 0)
+        self.assertEqual(sds[0]["photos_n"], 1)
+        self.assertEqual(sds[0]["status"], "incomplete")
+        self.assertEqual(sds[1]["photos_n"], 2)
+        self.assertEqual(sds[1]["status"], "banned")
+        self.assertIn("session_start", sds[0])
+        self.assertIn("start", sds[1])
         self.assertEqual(a["sessions"], [0, 1])
         self.assertTrue(a["retried"])
         self.assertEqual(a["photos"], 3)
