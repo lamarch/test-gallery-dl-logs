@@ -8,6 +8,8 @@ with open(LOG_FILE, "w", encoding="utf-8") as f:
     f.write("[2026-11-22 18:40:12] [gallery-dl][debug] Starting DownloadJob for 'https://example.com'\n")
     f.write("[2026-11-22 18:40:44] [gallery-dl][error] Failed to download 'foo.jpg'\n")
     f.write("[%(asctime)s][%(levelname)s] %(name)s: %(message)s\n")
+    f.write("[2026-11-22 19:00:00] [facebook][error] You've been temporarily blocked from viewing images.\n")
+    f.write("[2026-11-22 19:00:01] [facebook][error] AuthRequired: cookies needed to access this profile\n")
 
 ALBUMS_FILE = os.path.join(LOG_DIR, "albums.txt")
 with open(ALBUMS_FILE, "w", encoding="utf-8") as f:
@@ -40,8 +42,7 @@ class ApiTests(unittest.TestCase):
         data = r.json()
         self.assertEqual(data["path"], LOG_FILE)
         self.assertEqual(len(data["lines"]), 2)
-        self.assertEqual(data["lines"][-1],
-                         "[%(asctime)s][%(levelname)s] %(name)s: %(message)s")
+        self.assertIn("AuthRequired", data["lines"][-1])
         self.assertEqual(data["offset"], os.path.getsize(LOG_FILE))
         self.assertTrue(data["eof"])
         self.assertIn("max_render", data)
@@ -55,11 +56,11 @@ class ApiTests(unittest.TestCase):
         self.assertFalse(data["eof"])
         r2 = self.client.get("/api/logs", params={"offset": data["offset"], "limit": 10})
         data2 = r2.json()
-        self.assertEqual(len(data2["lines"]), 1)
+        self.assertEqual(len(data2["lines"]), 3)
         self.assertTrue(data2["eof"])
 
     def test_search_whole_file(self):
-        data = self.client.get("/api/search", params={"q": "error"}).json()
+        data = self.client.get("/api/search", params={"q": "failed"}).json()
         self.assertEqual(data["count"], 1)
         self.assertEqual(data["shown"], 1)
         self.assertIn("Failed to download", data["lines"][0])
@@ -79,12 +80,13 @@ class ApiTests(unittest.TestCase):
     def test_stats_counts(self):
         data = self.client.get("/api/stats").json()
         self.assertTrue(data["exists"])
-        self.assertEqual(data["lines"], 3)
-        self.assertEqual(data["errors"], 1)
+        self.assertEqual(data["lines"], 5)
+        self.assertEqual(data["errors"], 3)
         self.assertEqual(data["warnings"], 0)
         self.assertEqual(data["jobs"], 1)
         self.assertEqual(data["downloads"], 1)
         self.assertEqual(data["skips"], 0)
+        self.assertEqual(data["rejections"], 2)
 
     def test_status(self):
         data = self.client.get("/api/status").json()
@@ -102,9 +104,9 @@ class ApiTests(unittest.TestCase):
             for line in r.iter_lines():
                 if line == "event: log":
                     events += 1
-                if events >= 3:
+                if events >= 5:
                     break
-        self.assertEqual(events, 3)
+        self.assertEqual(events, 5)
 
 
 if __name__ == "__main__":

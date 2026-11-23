@@ -23,6 +23,22 @@ PROGRESS_RE = re.compile(r"^\[\d+/\d+\]")
 JOB_RE = re.compile(r"Starting \w+Job for ")
 STARTED_RE = re.compile(r"Starting \w+Job for '([^']+)'")
 
+# Anti-bot / scraping rejection patterns, from gallery-dl's extractors
+# (mainly facebook.py in 1.32.21) and exception classes:
+# AbortExtraction("You've been temporarily blocked from viewing images."),
+# AuthRequired(...), ChallengeError/captcha, HttpError 401/403/429, 429 waits.
+REJECTION_RE = re.compile(
+    r"(?i)temporarily blocked"
+    r"|blocked from viewing"
+    r"|must be logged in|logged in to continue"
+    r"|AuthRequired|AuthorizationError|AuthenticationError"
+    r"|Invalid login credentials|credentials required|cookies needed"
+    r"|Too Many Requests|\b429\b"
+    r"|ChallengeError|[Cc]aptcha|FunCaptcha|GeeTest|hCaptcha"
+    r"|HttpError: '(?:401|403|429)"
+    r"|content isn't available"
+)
+
 app = FastAPI(title="gallery-dl dashboard")
 
 
@@ -183,7 +199,7 @@ def status():
 _stats_cache = {"key": None, "value": None}
 
 _EMPTY_STATS = {"exists": False, "lines": 0, "errors": 0, "warnings": 0,
-                "downloads": 0, "skips": 0, "jobs": 0}
+                "downloads": 0, "skips": 0, "jobs": 0, "rejections": 0}
 
 
 @app.get("/api/stats")
@@ -196,13 +212,15 @@ def stats():
     if _stats_cache["key"] == key:
         return _stats_cache["value"]
     counts = {"lines": 0, "errors": 0, "warnings": 0,
-              "downloads": 0, "skips": 0, "jobs": 0}
+              "downloads": 0, "skips": 0, "jobs": 0, "rejections": 0}
     with open(LOG_FILE, encoding="utf-8", errors="replace") as f:
         for raw_line in f:
             line = raw_line.rstrip("\n")
             if not line:
                 continue
             counts["lines"] += 1
+            if REJECTION_RE.search(line):
+                counts["rejections"] += 1
             m = LEVEL_RE.match(line)
             if m:
                 level = m.group(1)
