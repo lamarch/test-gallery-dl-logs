@@ -1,4 +1,5 @@
 import asyncio
+import io
 import json
 import os
 import re
@@ -6,7 +7,7 @@ import time
 from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, HTTPException, Query, Response
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
@@ -286,11 +287,12 @@ def _dir_names():
 
 
 def _album_display_name(url, set_id, names, dirnames):
-    if set_id:
-        if names.get("a." + set_id):
-            return names["a." + set_id]
-        if dirnames.get("a." + set_id):
-            return dirnames["a." + set_id]
+    # primary source: the download dir title gallery-dl itself created
+    # (".../<title> (a.<id>)") — i.e. the name as downloaded
+    if set_id and dirnames.get("a." + set_id):
+        return dirnames["a." + set_id]
+    if set_id and names.get("a." + set_id):
+        return names["a." + set_id]
     if names.get(url):
         return names[url]
     return None
@@ -573,10 +575,12 @@ def _annotate_disk(t):
         if f.get("album_set") and f.get("fbid"):
             disk_fbids_by_set.setdefault(f["album_set"], set()).add(f["fbid"])
     for s in t["sessions"]:
+        s["on_disk"] = 0
         for a in s["albums"]:
             key = "a." + a["set_id"] if a.get("set_id") else None
             disk = disk_fbids_by_set.get(key, set()) if key else set()
             a["on_disk"] = len(disk)
+            s["on_disk"] += a["on_disk"]
             a["missing_on_disk"] = sum(
                 1 for p in a["photos"]
                 if p.get("status") == "downloaded" and p.get("fbid") and p["fbid"] not in disk)
@@ -664,6 +668,10 @@ def album_detail(s: int, a: int, offset: int = Query(default=0, ge=0),
             q["size"] = f["size"]
             q["mtime"] = f["mtime"]
             q["name_date"] = f.get("name_date")
+            # seen in log but no download line (e.g. skipped because the file
+            # was already on disk from a previous run) -> it IS downloaded
+            if q["status"] == "pending":
+                q["status"] = "downloaded"
         else:
             q["on_disk"] = False
         q["link_photo"] = _photo_link(p.get("fbid"), alb.get("set_id"))
@@ -869,6 +877,42 @@ def file_endpoint(path: str = ""):
     if not full:
         raise HTTPException(404)
     return FileResponse(full)
+
+
+_thumb_cache = {}
+THUMB_MAX_W = 640
+
+
+@app.get("/api/thumb")
+def thumb_endpoint(path: str = "", w: int = Query(default=160, ge=16, le=THUMB_MAX_W)):
+    """Server-side resized JPEG thumbnail (the Files tab must not download
+    full-HD images for every row). Same traversal rules as /api/file."""
+    full = _safe_path(path)
+    if not full:
+        raise HTTPException(404)
+    try:
+        st = os.stat(full)
+        key = (full, st.st_mtime_ns, w)
+    except OSError:
+        raise HTTPException(404)
+    hit = _thumb_cache.get(key)
+    if hit is not None:
+        return Response(hit, media_type="image/jpeg")
+    try:
+        from PIL import Image
+        with Image.open(full) as im:
+            im.thumbnail((w, w))
+            if im.mode not in ("RGB", "L"):
+                im = im.convert("RGB")
+            buf = io.BytesIO()
+            im.save(buf, "JPEG", quality=70)
+            data = buf.getvalue()
+    except Exception:
+        raise HTTPException(422, "not a decodable image")
+    if len(_thumb_cache) > 1000:
+        _thumb_cache.clear()
+    _thumb_cache[key] = data
+    return Response(data, media_type="image/jpeg")
 
 
 def _exif_epoch(dto, offset):

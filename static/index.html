@@ -350,9 +350,13 @@ async function loadTree() {
 }
 function badge(txt, cls) { return '<span class="badge ' + cls + '">' + esc(txt) + "</span>"; }
 function statsLine(o) {
-  return '<span class="stat">🖼 <b>' + o.photos_n + '</b> photos · 📥 <b>' + o.files +
+  const pn = o.photos_n != null ? o.photos_n : (o.photos || 0);  // overview entries use "photos"
+  return '<span class="stat">💼 <b>' + pn + '</b> photos · 📥 <b>' + o.files +
     '</b> files · 💾 <b>' + humanSize(o.bytes) + '</b> · 💤 <b>' + o.sleeps.toFixed(1) +
-    's</b> sleep' + (o.errors ? ' · ✖ <b>' + o.errors + '</b>' : '') +
+    's</b> sleep' +
+    (o.on_disk != null ? ' · 💽 <b>' + o.on_disk + '</b> on disk' : '') +
+    (o.missing_on_disk ? ' · ⚠ <b>' + o.missing_on_disk + '</b> missing' : '') +
+    (o.errors ? ' · ✖ <b>' + o.errors + '</b>' : '') +
     (o.rejections ? ' · 🚫 <b>' + o.rejections + '</b>' : '') + "</span>";
 }
 function renderTree(t) {
@@ -378,8 +382,6 @@ function renderTree(t) {
         (a.link ? '<a href="' + esc(a.link) + '" target="_blank" rel="noopener">' + esc(trunc(a.url, 60)) + "</a>" : esc(trunc(a.url, 60))) +
         " &nbsp;" + badge(a.status, a.status) +
         (a.set_id ? ' <span class="stat">set=a.' + esc(a.set_id) + "</span>" : "") +
-        (a.on_disk != null ? ' <span class="stat">💾 on disk <b>' + a.on_disk + "</b>" +
-          (a.missing_on_disk ? ' · ⚠ missing <b>' + a.missing_on_disk + "</b>" : "") + "</span>" : "") +
         ' <span class="stat">' + fmtTs(a.start) + " → " + fmtTs(a.end) + " — " + esc(a.end_reason || "") + "</span>" +
         "<br>" + statsLine(a);
       ad.appendChild(asum);
@@ -565,7 +567,7 @@ function renderFiles() {
     if (shown >= 2000) break;
     shown++;
     const row = document.createElement("tr");
-    row.innerHTML = '<td><img class="thumb" loading="lazy" src="/api/file?path=' + encodeURIComponent(f.path) + '"></td>' +
+    row.innerHTML = '<td><img class="thumb" loading="lazy" src="/api/thumb?path=' + encodeURIComponent(f.path) + '&w=120" onerror="this.style.display=&quot;none&quot;"></td>' +
       "<td>" + esc(f.name) + (f.fbid ? '<br><span class="stat">fbid=' + esc(f.fbid) + "</span>" : "") + "</td>" +
       '<td class="stat">' + humanSize(f.size) + "</td>" +
       '<td class="stat">' + esc(f.name_date || "?") + "</td>" +
