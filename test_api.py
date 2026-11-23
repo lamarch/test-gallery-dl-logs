@@ -298,6 +298,34 @@ class TreeApiTests(unittest.TestCase):
         self.assertIn("fbid=29493523296960224", r["lines"][0])
         self.assertTrue(any("temporarily blocked" in l for l in r["lines"]))
 
+    def test_tree_photo_cap_and_span_fallback(self):
+        old = app_module.TREE_MAX_PHOTOS
+        clear_caches()
+        app_module.TREE_MAX_PHOTOS = 1
+        try:
+            t = self.client.get("/api/tree").json()
+            total_seen = sum(a["photos_n"] for s in t["sessions"] for a in s["albums"])
+            stored = sum(len(a["photos"]) for s in t["sessions"] for a in s["albums"])
+            self.assertEqual(total_seen, 3)   # all photos still counted
+            self.assertEqual(stored, 1)       # but only 1 materialized (RAM cap)
+            self.assertTrue(any(a["photos_truncated"]
+                                for s in t["sessions"] for a in s["albums"]))
+            # album detail still returns ALL photos of a truncated album
+            # (re-parsed from its log span)
+            d = self.client.get("/api/album/1/0").json()
+            self.assertEqual(d["photos_n"], 2)
+            self.assertEqual(len(d["photos"]), 2)
+            self.assertEqual({p["fbid"] for p in d["photos"]},
+                             {"29493523296960224", "29493523083626912"})
+            # the fallback also registers per-photo log spans
+            r = self.client.get("/api/photo/1/0/0/logs").json()
+            self.assertIn("fbid=29493523296960224", r["lines"][0])
+        finally:
+            app_module.TREE_MAX_PHOTOS = old
+            clear_caches()
+        d = self.client.get("/api/album/1/0").json()
+        self.assertEqual(len(d["photos"]), 2)
+
     def test_albums_overview_retried(self):
         o = self.client.get("/api/albums_overview").json()
         self.assertEqual(len(o["albums"]), 1)

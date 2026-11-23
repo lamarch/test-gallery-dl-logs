@@ -22,6 +22,7 @@ services:
       MAX_RENDER_LINES: "20000"             # browser DOM cap
       SCAN_MAX_BYTES: "134217728"           # stats/search/tree scan only the last 128 MiB (log grows unbounded in mode "a")
       PHOTOS_PAGE_SIZE: "500"               # photos per page in the tree view ("load more"); keeps big albums light
+      TREE_MAX_PHOTOS: "50000"              # RAM cap on materialized photo nodes in the parsed tree; beyond it, albums are re-parsed from their log span on demand
     volumes:
       - ./downloads-2:/downloads:ro         # same mount as fb-dl, read-only
       - ./config/albums.txt:/config/albums.txt:ro

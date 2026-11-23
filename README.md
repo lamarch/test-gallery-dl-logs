@@ -139,6 +139,7 @@ legacy non-interpolated lines (`[%(asctime)s][%(levelname)s] …`) are shown as 
 | `TAIL_WINDOW_BYTES` | `4194304` (4 MiB) | max bytes scanned for a tail/backwards read |
 | `SCAN_MAX_BYTES` | `0` (whole file) | if > 0, `/api/stats`, `/api/search`, album-start detection and the tree parser only scan the last N bytes (`truncated: true` reported). The example compose sets 128 MiB since the log grows unbounded in `mode: "a"` |
 | `PHOTOS_PAGE_SIZE` | `500` | photos per page in the Tree tab ("load more" pagination) |
+| `TREE_MAX_PHOTOS` | `50000` | RAM cap on photo nodes materialized in the parsed tree (`<= 0` = unlimited). Beyond the cap, photos are still counted and `/api/album/{s}/{a}` re-parses the album's log span on demand (per-photo log spans keep working) |
 
 ## API
 
@@ -167,8 +168,9 @@ legacy non-interpolated lines (`[%(asctime)s][%(levelname)s] …`) are shown as 
 ## Notes
 
 - With `mode: "a"` and no rotation, `fb-dl.log` grows forever. Browsing stays chunked;
-  the one-pass scans are capped via `SCAN_MAX_BYTES`. Log rotation (rename **and**
-  copytruncate) is detected live in the SSE stream.
+  the one-pass scans are capped via `SCAN_MAX_BYTES` (streamed, bounded memory), and the
+  parsed tree keeps at most `TREE_MAX_PHOTOS` photo nodes in RAM. Log rotation (rename
+  **and** copytruncate) is detected live in the SSE stream.
 - **Power outage / restart**: set `restart: unless-stopped` on `fb-dl` so it resumes
   by itself after a reboot — with `-I albums.txt` it skips the albums already marked
   `#` and continues where it stopped. Each restart shows up as a new session branch

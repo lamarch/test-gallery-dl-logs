@@ -21,6 +21,10 @@ TAIL_WINDOW_BYTES = int(os.environ.get("TAIL_WINDOW_BYTES", str(4 * 1024 * 1024)
 # stats/search/tree parsing (0 = scan the whole file).
 SCAN_MAX_BYTES = int(os.environ.get("SCAN_MAX_BYTES", "0"))
 PHOTOS_PAGE_SIZE = int(os.environ.get("PHOTOS_PAGE_SIZE", "500"))
+# Max photo nodes materialized in the parsed tree (RAM guard); <= 0 = unlimited.
+# Beyond the cap, photos are still counted and /api/album/{s}/{a} re-parses the
+# album's log span on demand.
+TREE_MAX_PHOTOS = int(os.environ.get("TREE_MAX_PHOTOS", "50000"))
 STATIC_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static")
 
 # gallery-dl log line formats:
@@ -124,19 +128,31 @@ def _scan_range():
     return 0, size
 
 
-def _iter_log_entries(chunk=1024 * 1024):
+def _iter_log_entries(chunk=1024 * 1024, start_byte=None, end_byte=None):
     """Yield (start_byte, end_byte, line) for each complete line of the scanned
-    region, streaming in `chunk`-byte reads (bounded memory on huge files)."""
-    start, size = _scan_range()
-    if size == 0:
+    region (or of [start_byte, end_byte) when given), streaming in `chunk`-byte
+    reads (bounded memory on huge files)."""
+    if start_byte is None:
+        start, size = _scan_range()
+    else:
+        start = start_byte
+        try:
+            size = os.path.getsize(LOG_FILE)
+        except OSError:
+            return
+    if end_byte is not None:
+        size = min(size, end_byte)
+    if size <= start:
         return
-    skip_first_partial = start > 0
+    # when start_byte is given explicitly it is a line boundary -> keep the
+    # first line; only the scanned-region start may begin mid-line
+    skip_first_partial = start_byte is None and start > 0
     pending = b""
     pos = start
     with open(LOG_FILE, "rb") as f:
         f.seek(start)
-        while True:
-            buf = f.read(chunk)
+        while pos < size:
+            buf = f.read(min(chunk, size - pos))
             if not buf:
                 break
             parts = (pending + buf).split(b"\n")
@@ -147,7 +163,7 @@ def _iter_log_entries(chunk=1024 * 1024):
                 else:
                     yield pos, pos + len(b) + 1, b.decode("utf-8", "replace")
                 pos += len(b) + 1
-    if pending and not skip_first_partial:
+    if pending and not skip_first_partial and pos < size + 1:
         yield pos, pos + len(pending), pending.decode("utf-8", "replace")
 
 
@@ -312,6 +328,7 @@ def parse_log():
 
     sessions = []
     spans = {}
+    stored_photos = [0]  # RAM guard: cap on materialized photo nodes
     si = ai = pi = -1
     cur_s = cur_a = cur_p = None
 
@@ -326,7 +343,7 @@ def parse_log():
         close_photo(end_off, ts)
         if cur_a is not None:
             cur_a["end"] = ts
-            cur_a["photos_n"] = len(cur_a["photos"])
+            cur_a["photos_n"] = cur_a["photos_seen"]
             cur_a["status"], cur_a["end_reason"] = _album_status(cur_a, done_urls)
             spans[("s", si, ai)] = (cur_a["start_off"], end_off)
             cur_a = None
@@ -370,16 +387,25 @@ def parse_log():
                 cur_a = {"idx": ai, "url": url, "set_id": set_id, "vanity": vanity,
                          "link": _album_link(url, set_id), "start": ts, "end": ts,
                          "start_off": start, "end_off": end, "photos": [], "photos_n": 0,
+                         "photos_seen": 0, "photos_truncated": False,
                          "files": 0, "bytes": 0, "sleeps": 0.0, "errors": 0, "rejections": 0}
                 cur_s["albums"].append(cur_a)
             pm = PHOTO_GET_RE.search(line)
             if pm and cur_a is not None:
                 close_photo(prev_end, prev_ts)
                 pi += 1
-                cur_p = {"idx": pi, "fbid": pm.group(1), "ts": ts, "start": ts, "end": ts,
-                         "start_off": start, "end_off": end, "status": "pending",
-                         "file": None, "sleep": 0.0, "bytes": 0}
-                cur_a["photos"].append(cur_p)
+                cur_a["photos_seen"] += 1
+                if TREE_MAX_PHOTOS <= 0 or stored_photos[0] < TREE_MAX_PHOTOS:
+                    stored_photos[0] += 1
+                    cur_p = {"idx": pi, "fbid": pm.group(1), "ts": ts,
+                             "start_off": start, "end_off": end, "status": "pending",
+                             "file": None, "sleep": 0.0, "bytes": 0}
+                    cur_a["photos"].append(cur_p)
+                else:
+                    # cap hit: count the photo but don't materialize it;
+                    # /api/album/{s}/{a} re-parses this album's span on demand
+                    cur_p = None
+                    cur_a["photos_truncated"] = True
             rm = RESP_RE.search(line)
             if rm:
                 status = int(rm.group(1))
@@ -431,7 +457,6 @@ def parse_log():
                 if cur_s is not None:
                     cur_s["errors"] += 1
         if cur_p is not None:
-            cur_p["end"] = ts
             cur_p["end_off"] = end
         if cur_a is not None:
             cur_a["end"] = ts
@@ -467,17 +492,68 @@ def tree():
     return t
 
 
+def _photos_from_album_span(spans, s, a):
+    """Re-parse one album's log span into photo nodes (used when the tree's
+    TREE_MAX_PHOTOS cap was hit). Also registers per-photo log spans."""
+    span = spans.get(("s", s, a))
+    if span is None:
+        return None
+    photos = []
+    cur = None
+    prev_end = span[0]
+    for start, end, line in _iter_log_entries(start_byte=span[0], end_byte=span[1]):
+        ts = _ts_of(line)
+        pm = PHOTO_GET_RE.search(line)
+        if pm:
+            if cur is not None:
+                cur["end_off"] = prev_end
+                spans[("s", s, a, cur["idx"])] = (cur["start_off"], cur["end_off"])
+            cur = {"idx": len(photos), "fbid": pm.group(1), "ts": ts,
+                   "start_off": start, "end_off": end, "status": "pending",
+                   "file": None, "sleep": 0.0, "bytes": 0}
+            photos.append(cur)
+        rm = RESP_RE.search(line)
+        if rm and cur is not None and int(rm.group(1)) < 400 and rm.group(2):
+            cur["bytes"] += int(rm.group(2))
+        dm = DOWNLOAD_RE.search(line)
+        if dm and cur is not None:
+            cur["status"] = "downloaded"
+            cur["file"] = dm.group(1)
+            fm = FN_ID_RE.search(dm.group(1))
+            if fm and not cur["fbid"]:
+                cur["fbid"] = fm.group(1)
+        fm = FAILED_RE.search(line)
+        if fm and cur is not None:
+            cur["status"] = "failed"
+            fid = FN_ID_RE.search(fm.group(1))
+            if fid and not cur["fbid"]:
+                cur["fbid"] = fid.group(1)
+        sm = SLEEP_RE.search(line)
+        if sm and cur is not None and sm.group(2) == "download":
+            cur["sleep"] += float(sm.group(1))
+        prev_end = end
+    if cur is not None:
+        cur["end_off"] = prev_end
+        spans[("s", s, a, cur["idx"])] = (cur["start_off"], cur["end_off"])
+    return photos
+
+
 @app.get("/api/album/{s}/{a}")
 def album_detail(s: int, a: int, offset: int = 0,
                  limit: int = Query(default=PHOTOS_PAGE_SIZE, ge=1, le=5000)):
-    t, _ = get_tree()
+    t, spans = get_tree()
     try:
         alb = t["sessions"][s]["albums"][a]
     except (IndexError, KeyError):
         raise HTTPException(404, "album not found")
+    photos_src = alb["photos"]
+    if alb.get("photos_truncated") and alb["photos_n"] > len(photos_src):
+        full = _photos_from_album_span(spans, s, a)
+        if full is not None:
+            photos_src = full
     by_fbid = {f["fbid"]: f for f in scan_downloads()["files"] if f.get("fbid")}
     photos = []
-    for p in alb["photos"][offset:offset + limit]:
+    for p in photos_src[offset:offset + limit]:
         q = dict(p)
         f = by_fbid.get(p.get("fbid"))
         if f:
