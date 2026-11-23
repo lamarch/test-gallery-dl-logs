@@ -51,9 +51,12 @@ def read_range(path, offset=0, max_lines=5000, max_bytes=4 * 1024 * 1024):
     at_file_end = offset + len(data) >= size
     last_nl = data.rfind(b"\n")
     if last_nl == -1:
-        if at_file_end and data:
-            return [data.decode("utf-8", "replace")], size, True
-        return [], offset, False
+        # No newline in the whole chunk: emit it as one (giant) line so that
+        # paging always progresses instead of blocking forever.
+        if not data:
+            return [], offset, at_file_end
+        new_offset = offset + len(data)
+        return [data.decode("utf-8", "replace")], new_offset, new_offset >= size
     raw = data[:last_nl].split(b"\n")
     if len(raw) > max_lines:
         raw = raw[:max_lines]
@@ -110,17 +113,24 @@ class Follower:
         self.path = path
         self.pos = offset
         self.pending = ""
+        self.ino = None
+        try:
+            self.ino = os.stat(self.path).st_ino
+        except OSError:
+            pass
 
     def poll(self):
         """Return the list of complete lines appended since the last call."""
         try:
-            size = os.path.getsize(self.path)
+            st = os.stat(self.path)
         except OSError:
             return []
-        if size < self.pos:
+        # rotation: new inode (rename) or shrinking file (copytruncate)
+        if st.st_ino != self.ino or st.st_size < self.pos:
             self.pos = 0
             self.pending = ""
-        if size <= self.pos:
+            self.ino = st.st_ino
+        if st.st_size <= self.pos:
             return []
         with open(self.path, "rb") as f:
             f.seek(self.pos)

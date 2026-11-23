@@ -27,7 +27,8 @@ LEVEL_RE = re.compile(r"^(?:\[[^\]]*\]\s*)?\[[^\]]*\]\[(debug|info|warning|error
 TS_RE = re.compile(r"^\[([^\]]+)\]")
 PROGRESS_RE = re.compile(r"^\[\d+/\d+\]")
 JOB_RE = re.compile(r"Starting \w+Job for ")
-STARTED_RE = re.compile(r"Starting \w+Job for '([^']+)'")
+# greedy (.+) so URLs containing an apostrophe are captured fully
+STARTED_RE = re.compile(r"Starting \w+Job for '(.+)'")
 SLEEP_RE = re.compile(r"Sleeping ([\d.]+) seconds \(([^)]+)\)")
 DOWNLOAD_RE = re.compile(r"Adjusting filename extension of '([^']+)'")
 
@@ -41,7 +42,7 @@ REJECTION_RE = re.compile(
     r"|must be logged in|logged in to continue"
     r"|AuthRequired|AuthorizationError|AuthenticationError"
     r"|Invalid login credentials|credentials required|cookies needed"
-    r"|Too Many Requests|\b429\b"
+    r"|Too Many Requests"
     r"|ChallengeError|[Cc]aptcha|FunCaptcha|GeeTest|hCaptcha"
     r"|HttpError: '(?:401|403|429)"
     r"|content isn't available"
@@ -60,7 +61,7 @@ def index():
 def get_logs(
     offset: int = 0,
     limit: int = Query(default=CHUNK_LINES, ge=1, le=100000),
-    tail: int = Query(default=0, ge=0, description="if > 0: last N lines"),
+    tail: int = Query(default=0, ge=0, le=100000, description="if > 0: last N lines"),
     before: int = Query(default=0, ge=0, description="if > 0: N lines ending at this byte offset"),
 ):
     try:
@@ -110,19 +111,29 @@ def _scan_range():
     return 0, size
 
 
-def _iter_log_lines():
-    """Yield decoded lines of the scanned region of the log file."""
+def _iter_log_lines(chunk=1024 * 1024):
+    """Yield decoded lines of the scanned region of the log file, streaming
+    in `chunk`-byte reads (bounded memory even on huge files)."""
     start, size = _scan_range()
     if size == 0:
         return
+    first = start > 0
+    pending = b""
     with open(LOG_FILE, "rb") as f:
         f.seek(start)
-        data = f.read()
-    if start > 0:
-        nl = data.find(b"\n")
-        data = data[nl + 1:] if nl != -1 else b""
-    for line in data.decode("utf-8", "replace").splitlines():
-        yield line
+        while True:
+            buf = f.read(chunk)
+            if not buf:
+                break
+            parts = (pending + buf).split(b"\n")
+            pending = parts.pop()
+            if first:
+                first = False
+                parts = parts[1:]  # drop the partial first line
+            for b in parts:
+                yield b.decode("utf-8", "replace")
+    if pending:
+        yield pending.decode("utf-8", "replace")
 
 
 _search_cache = {"key": None, "value": None}
@@ -298,6 +309,8 @@ def stats():
             counts["skips"] += 1
         elif PROGRESS_RE.match(line):
             pass
+        elif line[:1] in (" ", "\t"):
+            pass  # indented traceback continuation lines are not downloads
         else:
             counts["downloads"] += 1
     value = {"exists": True, **counts, "files": files, "current_album": last_job,

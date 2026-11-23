@@ -33,13 +33,26 @@ touch config/albums.txt   # single-file bind mount needs the file to exist
 # paste the `webui` service from web-dashboard/compose.example.yml into your
 # compose.yml (under the existing `services:` key) + top-level `networks: caddy: external: true`
 # (network name confirmed as `caddy`; check with `docker network ls`)
-# Caddyfile:  logs.example.tld { reverse_proxy fb-dl-dashboard:8081 }
+# Caddyfile (with auth — the dashboard exposes /api/raw, do not leave it public):
+#   logs.example.tld {
+#       basicauth /* {
+#           admin JDJhJDE0JG...   # generate with: caddy hash-password
+#       }
+#       reverse_proxy fb-dl-dashboard:8081
+#   }
+# Alternative: restrict to your VPN/office IPs instead of basicauth, e.g.
+#   @allowed remote_ip 10.0.0.0/8 192.168.1.0/24
+#   handle @allowed { reverse_proxy fb-dl-dashboard:8081 }
+#   handle { respond 403 }
 
 docker compose up -d --build webui   # builds ./web-dashboard and starts the dashboard
 docker compose up -d fb-dl            # your scraper, unchanged
 ```
 
-Then open `https://logs.example.tld`. `docker compose logs -f fb-dl` still works.
+Then open `https://logs.example.tld` (behind the auth above). `docker compose logs -f fb-dl` still works.
+
+The webui container runs as `1000:1000` (same uid as fb-dl, so it can read the log)
+with `no-new-privileges`, and the image has a `HEALTHCHECK` on `/api/status`.
 
 ## Features
 

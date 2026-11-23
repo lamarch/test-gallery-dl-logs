@@ -104,6 +104,23 @@ class ReadRangeTests(unittest.TestCase):
         self.assertEqual(off, os.path.getsize(self.path))
         self.assertTrue(eof)
 
+    def test_giant_line_never_blocks_paging(self):
+        # a single 2.5 MiB line without newline, then a normal line
+        with open(self.path, "wb") as f:
+            f.write(b"x" * (5 * 1024 * 1024 // 2) + b"\nafter\n")
+        size = os.path.getsize(self.path)
+        offset = 0
+        seen_eof = False
+        for _ in range(10):  # must terminate well before this
+            lines, offset, eof = read_range(self.path, offset, 10, max_bytes=1024 * 1024)
+            if eof:
+                seen_eof = True
+                break
+            self.assertGreater(offset, 0)
+        self.assertTrue(seen_eof)
+        self.assertEqual(offset, size)
+        self.assertEqual(lines[-1], "after")
+
 
 class ReadRangeBackTests(unittest.TestCase):
     def setUp(self):
@@ -177,6 +194,19 @@ class FollowerTests(unittest.TestCase):
         os.remove(self.path)
         f = Follower(self.path, offset=100)
         self.assertEqual(f.poll(), [])
+
+    def test_rotation_by_rename_resets(self):
+        # simulate logrotate rename: new file (new inode) LARGER than the old
+        # offset — must reset to 0, not read misaligned from the old pos
+        f = Follower(self.path, offset=os.path.getsize(self.path))
+        tmp = self.path + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as fp:
+            for i in range(50):
+                fp.write(f"fresh-line-{i:02d}\n")
+        os.replace(tmp, self.path)
+        got = f.poll()
+        self.assertEqual(got[0], "fresh-line-00")
+        self.assertEqual(len(got), 50)
 
 
 if __name__ == "__main__":

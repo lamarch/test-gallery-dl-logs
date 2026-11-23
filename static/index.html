@@ -139,7 +139,9 @@ const LEVEL_RE = /^(?:\[[^\]]*\]\s*)?\[[^\]]*\]\[(debug|info|warning|error|criti
 const PROGRESS_RE = /^\[\d+\/\d+\]/;
 const TS_RE = /^\[([^\]]+)\]\s*\[([^\]]*)\]\[(\w+)\]\s?(.*)$/;
 // keep in sync with REJECTION_RE in app.py
-const REJECTION_RE = /temporarily blocked|blocked from viewing|must be logged in|logged in to continue|AuthRequired|AuthorizationError|AuthenticationError|Invalid login credentials|credentials required|cookies needed|Too Many Requests|\b429\b|ChallengeError|captcha|FunCaptcha|GeeTest|hCaptcha|HttpError: '(?:401|403|429)|content isn't available/i;
+// keep in sync with REJECTION_RE in app.py (no bare \b429\b: it would match
+// progress lines like "[429/500]")
+const REJECTION_RE = /temporarily blocked|blocked from viewing|must be logged in|logged in to continue|AuthRequired|AuthorizationError|AuthenticationError|Invalid login credentials|credentials required|cookies needed|Too Many Requests|ChallengeError|captcha|FunCaptcha|GeeTest|hCaptcha|HttpError: '(?:401|403|429)|content isn't available/i;
 
 function levelOf(line) {
   const m = LEVEL_RE.exec(line);

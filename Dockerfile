@@ -9,4 +9,5 @@ COPY static ./static
 ENV LOG_FILE=/downloads/logs/fb-dl.log
 ENV ALBUMS_FILE=/config/albums.txt
 EXPOSE 8081
+HEALTHCHECK --interval=30s --timeout=3s CMD python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8081/api/status', timeout=2)" || exit 1
 CMD ["uvicorn", "app:app", "--host", "0.0.0.0", "--port", "8081"]

@@ -13,6 +13,9 @@ services:
     build: ./web-dashboard
     container_name: fb-dl-dashboard
     restart: unless-stopped
+    user: "1000:1000"                       # same uid as fb-dl: can read the log
+    security_opt:
+      - no-new-privileges:true
     environment:
       LOG_FILE: /downloads/logs/fb-dl.log   # output.logfile.path from config/gallery-dl.conf
       ALBUMS_FILE: /config/albums.txt       # the -I input file (single file mount)
