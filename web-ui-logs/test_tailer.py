@@ -3,7 +3,7 @@ import shutil
 import tempfile
 import unittest
 
-from tailer import Follower, read_tail
+from tailer import Follower, read_range, read_tail
 
 
 class ReadTailTests(unittest.TestCase):
@@ -41,7 +41,7 @@ class ReadTailTests(unittest.TestCase):
         self.write("onlypartial")
         self.assertEqual(read_tail(self.path, 10), ([], 0))
 
-    def test_large_file_window(self):
+    def test_large_file_whole_scan(self):
         with open(self.path, "w", encoding="utf-8") as f:
             for i in range(2000):
                 f.write(f"line {i}\n")
@@ -50,6 +50,55 @@ class ReadTailTests(unittest.TestCase):
         self.assertEqual(lines[0], "line 1500")
         self.assertEqual(lines[-1], "line 1999")
         self.assertEqual(offset, os.path.getsize(self.path))
+
+
+class ReadRangeTests(unittest.TestCase):
+    def setUp(self):
+        self.dir = tempfile.mkdtemp()
+        self.path = os.path.join(self.dir, "test.log")
+
+    def tearDown(self):
+        shutil.rmtree(self.dir, ignore_errors=True)
+
+    def write(self, text):
+        with open(self.path, "w", encoding="utf-8") as f:
+            f.write(text)
+
+    def test_missing_file(self):
+        self.assertEqual(read_range(self.path, 0, 10), ([], 0, True))
+
+    def test_offset_beyond_eof(self):
+        self.write("a\nb\n")
+        size = os.path.getsize(self.path)
+        self.assertEqual(read_range(self.path, 10**9, 10), ([], size, True))
+
+    def test_chunked_reading(self):
+        self.write("".join(f"l{i}\n" for i in range(10)))
+        size = os.path.getsize(self.path)
+        lines, off, eof = read_range(self.path, 0, 4)
+        self.assertEqual(lines, ["l0", "l1", "l2", "l3"])
+        self.assertEqual(off, 12)
+        self.assertFalse(eof)
+        lines, off, eof = read_range(self.path, off, 4)
+        self.assertEqual(lines, ["l4", "l5", "l6", "l7"])
+        self.assertFalse(eof)
+        lines, off, eof = read_range(self.path, off, 4)
+        self.assertEqual(lines, ["l8", "l9"])
+        self.assertEqual(off, size)
+        self.assertTrue(eof)
+
+    def test_trailing_partial_line_included_at_eof(self):
+        self.write("a\nb\npartial")
+        lines, off, eof = read_range(self.path, 0, 100)
+        self.assertEqual(lines, ["a", "b", "partial"])
+        self.assertEqual(off, os.path.getsize(self.path))
+        self.assertTrue(eof)
+
+    def test_partial_line_not_returned_before_eof(self):
+        self.write("abc")
+        lines, off, eof = read_range(self.path, 0, 100)
+        self.assertEqual(lines, ["abc"])
+        self.assertTrue(eof)
 
 
 class FollowerTests(unittest.TestCase):

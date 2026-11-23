@@ -11,7 +11,7 @@ jobs:
     runs-on: ubuntu-latest
     defaults:
       run:
-        working-directory: webui
+        working-directory: web-ui-logs
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -21,25 +21,27 @@ jobs:
         run: pip install -r requirements.txt -r requirements-dev.txt
       - name: Compile check
         run: python -m py_compile app.py tailer.py test_tailer.py test_api.py
-      - name: Tailer unit tests
-        run: python -m unittest test_tailer -v
-      - name: API tests
-        run: python -m unittest test_api -v
+      - name: Unit + API tests
+        run: python -m unittest test_tailer test_api -v
 
-  compose:
+  docker:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Validate compose.yml (YAML + services)
+      - name: Build web-ui-logs image
+        run: docker build -t web-ui-logs:ci ./web-ui-logs
+      - name: Validate compose.example.yml
         run: |
           pip install pyyaml
           python - <<'PY'
           import yaml
-          doc = yaml.safe_load(open("compose.yml"))
-          assert set(doc["services"]) == {"fb-dl", "webui"}, doc["services"].keys()
-          webui = doc["services"]["webui"]
-          assert webui["volumes"] == ["./downloads-2:/downloads:ro"], webui["volumes"]
-          print("compose.yml OK, services:", sorted(doc["services"]))
+          doc = yaml.safe_load(open("compose.example.yml"))
+          svc = doc["services"]["webui"]
+          assert "ports" not in svc, "webui must not publish ports"
+          assert svc["build"] == "./web-ui-logs"
+          assert "caddy" in svc["networks"]
+          assert doc["networks"]["caddy"]["external"] is True
+          assert svc["environment"]["LOG_FILE"] == "/downloads/logs/fb-dl.log"
+          print("compose.example.yml OK")
           PY
-      - name: docker compose config
-        run: docker compose config --quiet && echo "docker compose config OK"
+          docker compose -f compose.example.yml config --quiet && echo "docker compose config OK"
