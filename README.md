@@ -1,5 +1,11 @@
 # web-dashboard — live log viewer for gallery-dl (fb-dl)
 
+The UI is a single self-contained page (no external CDN — it must work on a private
+Docker network), styled like classic Bootstrap (light theme, cards, badges, pill chips,
+buttons) for readability and contrast. Every stat segment has a tooltip explaining its
+source, and the browser back/forward buttons navigate tabs and `#album=<set_id>`
+permalinks (History API). Dates render `DD/MM/YY HH:MM:SS` in `DISPLAY_TZ`.
+
 This repo is the **content of the `web-dashboard/` folder** of your gallery-dl
 project: a self-contained Docker image (Dockerfile at the repo root) that serves a
 web UI to follow the `fb-dl` container's log file live and track album progress.
@@ -129,7 +135,8 @@ Log line format handled (verified against gallery-dl 1.32.21 output):
 `[2026-11-22 18:40:12] [facebook][debug] …` and the default `[facebook][debug] …`;
 legacy non-interpolated lines (`[%(asctime)s][%(levelname)s] …`) are shown as "other".
 
-**Photos vs files vs on-disk** (labels in the UI say which source each number comes from):
+**Photos vs files vs on-disk** (each number in the UI has a tooltip saying which source
+it comes from):
 - `photos` = `"GET /photo/?fbid=…` lines in the log = photo pages visited (log);
 - `downloaded`/`files` = media payloads actually downloaded in this run — HTTP `< 400`
   with a byte count from the CDN `fbcdn.net` (log). Do NOT count `Adjusting filename
