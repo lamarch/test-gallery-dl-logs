@@ -1,0 +1,45 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - "vibe/*"
+  pull_request:
+
+jobs:
+  webui:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: webui
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install dependencies
+        run: pip install -r requirements.txt -r requirements-dev.txt
+      - name: Compile check
+        run: python -m py_compile app.py tailer.py test_tailer.py test_api.py
+      - name: Tailer unit tests
+        run: python -m unittest test_tailer -v
+      - name: API tests
+        run: python -m unittest test_api -v
+
+  compose:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate compose.yml (YAML + services)
+        run: |
+          pip install pyyaml
+          python - <<'PY'
+          import yaml
+          doc = yaml.safe_load(open("compose.yml"))
+          assert set(doc["services"]) == {"fb-dl", "webui"}, doc["services"].keys()
+          webui = doc["services"]["webui"]
+          assert webui["volumes"] == ["./downloads-2:/downloads:ro"], webui["volumes"]
+          print("compose.yml OK, services:", sorted(doc["services"]))
+          PY
+      - name: docker compose config
+        run: docker compose config --quiet && echo "docker compose config OK"

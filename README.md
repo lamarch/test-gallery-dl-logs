@@ -55,6 +55,14 @@ pip install -r requirements.txt
 LOG_FILE=/tmp/fb-dl.log uvicorn app:app --port 8081
 ```
 
+Run the tests:
+
+```bash
+cd webui
+pip install -r requirements.txt -r requirements-dev.txt
+python -m unittest test_tailer test_api -v
+```
+
 ## Webui API
 
 | Endpoint | Description |
