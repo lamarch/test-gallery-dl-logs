@@ -20,7 +20,8 @@ services:
       LOG_FILE: /downloads/logs/fb-dl.log   # output.logfile.path from config/gallery-dl.conf
       ALBUMS_FILE: /config/albums.txt       # the -I input file (single file mount)
       MAX_RENDER_LINES: "20000"             # browser DOM cap
-      SCAN_MAX_BYTES: "134217728"           # stats/search scan only the last 128 MiB (log grows unbounded in mode "a")
+      SCAN_MAX_BYTES: "134217728"           # stats/search/tree scan only the last 128 MiB (log grows unbounded in mode "a")
+      PHOTOS_PAGE_SIZE: "500"               # photos per page in the tree view ("load more"); keeps big albums light
     volumes:
       - ./downloads-2:/downloads:ro         # same mount as fb-dl, read-only
       - ./config/albums.txt:/config/albums.txt:ro

@@ -2,22 +2,25 @@ import asyncio
 import json
 import os
 import re
+from datetime import datetime, timezone
 
-from fastapi import FastAPI, Query
+from fastapi import FastAPI, HTTPException, Query
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
-from tailer import Follower, read_range, read_range_back, read_tail
+from tailer import Follower, read_range, read_range_back, read_span, read_tail
 
 LOG_FILE = os.environ.get("LOG_FILE", "/downloads/logs/fb-dl.log")
 ALBUMS_FILE = os.environ.get("ALBUMS_FILE", "/config/albums.txt")
+DOWNLOADS_DIR = os.environ.get("DOWNLOADS_DIR", "/downloads")
 DEFAULT_TAIL = int(os.environ.get("TAIL_LINES", "500"))
 CHUNK_LINES = int(os.environ.get("CHUNK_LINES", "5000"))
 MAX_RENDER = int(os.environ.get("MAX_RENDER_LINES", "20000"))
 TAIL_WINDOW_BYTES = int(os.environ.get("TAIL_WINDOW_BYTES", str(4 * 1024 * 1024)))
 # With SCAN_MAX_BYTES > 0, only the tail of the log file is scanned for
-# stats/search/album-start detection (0 = scan the whole file).
+# stats/search/tree parsing (0 = scan the whole file).
 SCAN_MAX_BYTES = int(os.environ.get("SCAN_MAX_BYTES", "0"))
+PHOTOS_PAGE_SIZE = int(os.environ.get("PHOTOS_PAGE_SIZE", "500"))
 STATIC_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static")
 
 # gallery-dl log line formats:
@@ -26,16 +29,22 @@ STATIC_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static")
 LEVEL_RE = re.compile(r"^(?:\[[^\]]*\]\s*)?\[[^\]]*\]\[(debug|info|warning|error|critical)\]")
 TS_RE = re.compile(r"^\[([^\]]+)\]")
 PROGRESS_RE = re.compile(r"^\[\d+/\d+\]")
-JOB_RE = re.compile(r"Starting \w+Job for ")
-# greedy (.+) so URLs containing an apostrophe are captured fully
-STARTED_RE = re.compile(r"Starting \w+Job for '(.+)'")
+STARTED_RE = re.compile(r"Starting \w+Job for '(.+)'")  # greedy: URLs may contain '
 SLEEP_RE = re.compile(r"Sleeping ([\d.]+) seconds \(([^)]+)\)")
 DOWNLOAD_RE = re.compile(r"Adjusting filename extension of '([^']+)'")
+FAILED_RE = re.compile(r"Failed to download '([^']+)'")
+VERSION_RE = re.compile(r"\[gallery-dl\]\[debug\] Version ")
+PHOTO_GET_RE = re.compile(r'"GET /photo/\?fbid=(\d+)')
+RESP_RE = re.compile(r'"(?:GET|POST) [^"]+ HTTP/1\.1" (\d{3})(?: (\d+))?')
+FN_ID_RE = re.compile(r"_(\d{6,})\.[A-Za-z0-9]+$")
+FN_DATE_RE = re.compile(r"(\d{8})_(\d{6})_")
+SET_RE = re.compile(r"set=a\.([0-9]+)")
+VANITY_RE = re.compile(r"vanity=([0-9]+)")
+DIR_SET_RE = re.compile(r"\((a\.[0-9]+)\)")
 
-# Anti-bot / scraping rejection patterns, from gallery-dl's extractors
-# (mainly facebook.py in 1.32.21) and exception classes:
-# AbortExtraction("You've been temporarily blocked from viewing images."),
-# AuthRequired(...), ChallengeError/captcha, HttpError 401/403/429, 429 waits.
+# Anti-bot / scraping rejection patterns (gallery-dl 1.32.21 facebook extractor).
+# NOTE: no bare \b429\b — it would match progress lines like "[429/500]".
+# Keep in sync with REJECTION_RE in static/index.html.
 REJECTION_RE = re.compile(
     r"(?i)temporarily blocked"
     r"|blocked from viewing"
@@ -48,6 +57,8 @@ REJECTION_RE = re.compile(
     r"|content isn't available"
 )
 
+IMAGE_EXTS = {"jpg", "jpeg", "png", "webp", "gif", "avif", "bmp", "mp4", "mov", "webm"}
+
 app = FastAPI(title="gallery-dl dashboard")
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
@@ -56,6 +67,8 @@ app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 def index():
     return FileResponse(os.path.join(STATIC_DIR, "index.html"))
 
+
+# ---------------------------------------------------------------- log reading
 
 @app.get("/api/logs")
 def get_logs(
@@ -101,7 +114,7 @@ async def stream(since: int = 0):
 
 
 def _scan_range():
-    """Return (start_byte, size) of the log region scanned for stats/search."""
+    """Return (start_byte, size) of the log region scanned for stats/search/tree."""
     try:
         size = os.path.getsize(LOG_FILE)
     except OSError:
@@ -111,14 +124,15 @@ def _scan_range():
     return 0, size
 
 
-def _iter_log_lines(chunk=1024 * 1024):
-    """Yield decoded lines of the scanned region of the log file, streaming
-    in `chunk`-byte reads (bounded memory even on huge files)."""
+def _iter_log_entries(chunk=1024 * 1024):
+    """Yield (start_byte, end_byte, line) for each complete line of the scanned
+    region, streaming in `chunk`-byte reads (bounded memory on huge files)."""
     start, size = _scan_range()
     if size == 0:
         return
-    first = start > 0
+    skip_first_partial = start > 0
     pending = b""
+    pos = start
     with open(LOG_FILE, "rb") as f:
         f.seek(start)
         while True:
@@ -127,14 +141,22 @@ def _iter_log_lines(chunk=1024 * 1024):
                 break
             parts = (pending + buf).split(b"\n")
             pending = parts.pop()
-            if first:
-                first = False
-                parts = parts[1:]  # drop the partial first line
             for b in parts:
-                yield b.decode("utf-8", "replace")
-    if pending:
-        yield pending.decode("utf-8", "replace")
+                if skip_first_partial:
+                    skip_first_partial = False
+                else:
+                    yield pos, pos + len(b) + 1, b.decode("utf-8", "replace")
+                pos += len(b) + 1
+    if pending and not skip_first_partial:
+        yield pos, pos + len(pending), pending.decode("utf-8", "replace")
 
+
+def _iter_log_lines():
+    for _, _, line in _iter_log_entries():
+        yield line
+
+
+# ---------------------------------------------------------------- search/stats
 
 _search_cache = {"key": None, "value": None}
 
@@ -168,6 +190,8 @@ def search(q: str = "", limit: int = Query(default=200, ge=1, le=2000)):
     _search_cache["value"] = value
     return value
 
+
+# ---------------------------------------------------------------- albums file
 
 def _read_albums_file(path):
     """Parse a gallery-dl -I input file. Return [(url, done)] or None if missing.
@@ -238,6 +262,419 @@ def albums():
     return {"available": True, "path": ALBUMS_FILE, "albums": out,
             "counts": counts, "current": current}
 
+
+# ---------------------------------------------------------------- tree parser
+
+def _ts_of(line):
+    m = TS_RE.match(line)
+    return m.group(1) if m else ""
+
+
+def _parse_url_ids(url):
+    m = SET_RE.search(url)
+    set_id = m.group(1) if m else None
+    m = VANITY_RE.search(url)
+    vanity = m.group(1) if m else None
+    return set_id, vanity
+
+
+def _album_link(url, set_id):
+    if set_id:
+        return f"https://www.facebook.com/media/set/?set=a.{set_id}&type=3"
+    return url
+
+
+def _photo_link(fbid, set_id):
+    if fbid and set_id:
+        return f"https://www.facebook.com/photo/?fbid={fbid}&set=a.{set_id}"
+    if fbid:
+        return f"https://www.facebook.com/photo/?fbid={fbid}"
+    return None
+
+
+def _album_status(a, done_urls):
+    if a["url"] in done_urls:
+        return "done", "completed (marked '#' in albums.txt)"
+    if a["rejections"]:
+        return "banned", "scraping rejection (anti-bot)"
+    if a["errors"]:
+        return "error", "error(s) in log"
+    return "incomplete", "session end / interrupted"
+
+
+def parse_log():
+    """Parse the scanned log region into a session -> album -> photo tree.
+
+    Return (tree, spans): spans maps ("s", si) / ("s", si, ai) / ("s", si, ai, pi)
+    to (start_byte, end_byte) ranges in the log file."""
+    parsed_albums = _read_albums_file(ALBUMS_FILE) or []
+    done_urls = {u for u, d in parsed_albums if d}
+
+    sessions = []
+    spans = {}
+    si = ai = pi = -1
+    cur_s = cur_a = cur_p = None
+
+    def close_photo(end_off, ts):
+        nonlocal cur_p
+        if cur_p is not None:
+            spans[("s", si, ai, pi)] = (cur_p["start_off"], end_off)
+            cur_p = None
+
+    def close_album(end_off, ts):
+        nonlocal cur_a, ai
+        close_photo(end_off, ts)
+        if cur_a is not None:
+            cur_a["end"] = ts
+            cur_a["photos_n"] = len(cur_a["photos"])
+            cur_a["status"], cur_a["end_reason"] = _album_status(cur_a, done_urls)
+            spans[("s", si, ai)] = (cur_a["start_off"], end_off)
+            cur_a = None
+
+    def close_session(end_off, ts):
+        nonlocal cur_s, si
+        close_album(end_off, ts)
+        if cur_s is not None:
+            cur_s["end"] = ts
+            cur_s["photos_n"] = sum(a["photos_n"] for a in cur_s["albums"])
+            spans[("s", si)] = (cur_s["start_off"], end_off)
+            cur_s = None
+
+    def new_session(start, ts):
+        nonlocal cur_s, si
+        si += 1
+        cur_s = {"idx": si, "start": ts, "end": ts, "start_off": start, "end_off": start,
+                 "albums": [], "photos_n": 0, "files": 0, "bytes": 0, "sleeps": 0.0,
+                 "errors": 0, "rejections": 0}
+        sessions.append(cur_s)
+
+    prev_end, prev_ts = 0, ""
+    for start, end, line in _iter_log_entries():
+        ts = _ts_of(line)
+        if VERSION_RE.search(line):
+            close_session(prev_end, prev_ts)
+            ai = pi = -1
+            cur_a = cur_p = None
+            new_session(start, ts)
+        else:
+            if cur_s is None:
+                new_session(start, ts)
+            m = STARTED_RE.search(line)
+            if m:
+                close_album(prev_end, prev_ts)
+                ai += 1
+                pi = -1
+                cur_p = None
+                url = m.group(1)
+                set_id, vanity = _parse_url_ids(url)
+                cur_a = {"idx": ai, "url": url, "set_id": set_id, "vanity": vanity,
+                         "link": _album_link(url, set_id), "start": ts, "end": ts,
+                         "start_off": start, "end_off": end, "photos": [], "photos_n": 0,
+                         "files": 0, "bytes": 0, "sleeps": 0.0, "errors": 0, "rejections": 0}
+                cur_s["albums"].append(cur_a)
+            pm = PHOTO_GET_RE.search(line)
+            if pm and cur_a is not None:
+                close_photo(prev_end, prev_ts)
+                pi += 1
+                cur_p = {"idx": pi, "fbid": pm.group(1), "ts": ts, "start": ts, "end": ts,
+                         "start_off": start, "end_off": end, "status": "pending",
+                         "file": None, "sleep": 0.0, "bytes": 0}
+                cur_a["photos"].append(cur_p)
+            rm = RESP_RE.search(line)
+            if rm:
+                status = int(rm.group(1))
+                nbytes = int(rm.group(2) or 0)
+                if status < 400 and nbytes:
+                    if cur_p is not None:
+                        cur_p["bytes"] += nbytes
+                    if cur_a is not None:
+                        cur_a["bytes"] += nbytes
+                    if cur_s is not None:
+                        cur_s["bytes"] += nbytes
+            dm = DOWNLOAD_RE.search(line)
+            if dm:
+                fname = dm.group(1)
+                if cur_p is not None:
+                    cur_p["status"] = "downloaded"
+                    cur_p["file"] = fname
+                    fm = FN_ID_RE.search(fname)
+                    if fm and not cur_p["fbid"]:
+                        cur_p["fbid"] = fm.group(1)
+                if cur_a is not None:
+                    cur_a["files"] += 1
+                if cur_s is not None:
+                    cur_s["files"] += 1
+            fm = FAILED_RE.search(line)
+            if fm and cur_p is not None:
+                cur_p["status"] = "failed"
+                fid = FN_ID_RE.search(fm.group(1))
+                if fid and not cur_p["fbid"]:
+                    cur_p["fbid"] = fid.group(1)
+            sm = SLEEP_RE.search(line)
+            if sm:
+                secs = float(sm.group(1))
+                if cur_a is not None:
+                    cur_a["sleeps"] += secs
+                if cur_s is not None:
+                    cur_s["sleeps"] += secs
+                if sm.group(2) == "download" and cur_p is not None:
+                    cur_p["sleep"] += secs
+            if REJECTION_RE.search(line):
+                if cur_a is not None:
+                    cur_a["rejections"] += 1
+                if cur_s is not None:
+                    cur_s["rejections"] += 1
+            lm = LEVEL_RE.match(line)
+            if lm and lm.group(1) in ("error", "critical"):
+                if cur_a is not None:
+                    cur_a["errors"] += 1
+                if cur_s is not None:
+                    cur_s["errors"] += 1
+        if cur_p is not None:
+            cur_p["end"] = ts
+            cur_p["end_off"] = end
+        if cur_a is not None:
+            cur_a["end"] = ts
+            cur_a["end_off"] = end
+        if cur_s is not None:
+            cur_s["end"] = ts
+            cur_s["end_off"] = end
+        prev_end, prev_ts = end, ts
+    close_session(prev_end, prev_ts)
+
+    return {"sessions": sessions, "runs": len(sessions), "done_urls": sorted(done_urls)}, spans
+
+
+_tree_cache = {"key": None, "value": None}
+
+
+def get_tree():
+    try:
+        st = os.stat(LOG_FILE)
+        key = (st.st_size, st.st_mtime_ns)
+    except OSError:
+        return {"sessions": [], "runs": 0, "done_urls": []}, {}
+    if _tree_cache["key"] == key:
+        return _tree_cache["value"]
+    value = parse_log()
+    _tree_cache.update(key=key, value=value)
+    return value
+
+
+@app.get("/api/tree")
+def tree():
+    t, _ = get_tree()
+    return t
+
+
+@app.get("/api/album/{s}/{a}")
+def album_detail(s: int, a: int, offset: int = 0,
+                 limit: int = Query(default=PHOTOS_PAGE_SIZE, ge=1, le=5000)):
+    t, _ = get_tree()
+    try:
+        alb = t["sessions"][s]["albums"][a]
+    except (IndexError, KeyError):
+        raise HTTPException(404, "album not found")
+    by_fbid = {f["fbid"]: f for f in scan_downloads()["files"] if f.get("fbid")}
+    photos = []
+    for p in alb["photos"][offset:offset + limit]:
+        q = dict(p)
+        f = by_fbid.get(p.get("fbid"))
+        if f:
+            q["on_disk"] = True
+            q["path"] = f["path"]
+            q["size"] = f["size"]
+            q["mtime"] = f["mtime"]
+            q["name_date"] = f.get("name_date")
+        else:
+            q["on_disk"] = False
+        q["link_photo"] = _photo_link(p.get("fbid"), alb.get("set_id"))
+        photos.append(q)
+    out = {k: v for k, v in alb.items() if k != "photos"}
+    out["photos"] = photos
+    return out
+
+
+def _span_lines(spans, key, offset, limit):
+    span = spans.get(key)
+    if span is None:
+        raise HTTPException(404, "not found")
+    lines = read_span(LOG_FILE, span[0], span[1])
+    return {"lines": lines[offset:offset + limit], "total": len(lines), "offset": offset}
+
+
+@app.get("/api/album/{s}/{a}/logs")
+def album_logs(s: int, a: int, offset: int = 0,
+               limit: int = Query(default=2000, ge=1, le=20000)):
+    _, spans = get_tree()
+    return _span_lines(spans, ("s", s, a), offset, limit)
+
+
+@app.get("/api/photo/{s}/{a}/{p}/logs")
+def photo_logs(s: int, a: int, p: int, offset: int = 0,
+               limit: int = Query(default=2000, ge=1, le=20000)):
+    _, spans = get_tree()
+    return _span_lines(spans, ("s", s, a, p), offset, limit)
+
+
+@app.get("/api/albums_overview")
+def albums_overview():
+    """Album-centric view across all sessions (set_id keyed), with retry flag."""
+    t, _ = get_tree()
+    by_set = {}
+    for f in scan_downloads()["files"]:
+        if f.get("album_set"):
+            by_set.setdefault(f["album_set"], []).append(f)
+    agg = {}
+    for s in t["sessions"]:
+        for a in s["albums"]:
+            key = a["set_id"] or a["url"]
+            e = agg.setdefault(key, {
+                "key": key, "url": a["url"], "set_id": a["set_id"], "vanity": a["vanity"],
+                "link": a["link"], "sessions": [], "status": a["status"],
+                "end_reason": a.get("end_reason"), "photos": 0, "files": 0, "bytes": 0,
+                "sleeps": 0.0, "errors": 0, "rejections": 0,
+                "on_disk": len(by_set.get("a." + a["set_id"], [])) if a["set_id"] else 0})
+            e["sessions"].append(s["idx"])
+            e["photos"] += a["photos_n"]
+            e["files"] += a["files"]
+            e["bytes"] += a["bytes"]
+            e["sleeps"] += a["sleeps"]
+            e["errors"] += a["errors"]
+            e["rejections"] += a["rejections"]
+    out = list(agg.values())
+    for e in out:
+        e["retried"] = len(set(e["sessions"])) > 1
+    out.sort(key=lambda e: (e["sessions"][0] if e["sessions"] else 0))
+    return {"albums": out, "done_urls": t["done_urls"]}
+
+
+# ---------------------------------------------------------------- disk index
+
+_files_cache = {"value": None}
+
+
+def scan_downloads(refresh=False):
+    """Index image files under DOWNLOADS_DIR (skipping the logs dir).
+
+    Filenames look like 20250429_081104_29388560487456506.jpg and album dirs
+    contain '(a.29388587357453819)' -> fbid / name_date / album_set."""
+    if not refresh and _files_cache["value"] is not None:
+        return _files_cache["value"]
+    files = []
+    root = DOWNLOADS_DIR
+    for dirpath, dirnames, filenames in os.walk(root):
+        dirnames[:] = [d for d in dirnames if d != "logs"]
+        rel_dir = os.path.relpath(dirpath, root)
+        m = DIR_SET_RE.search(rel_dir)
+        album_set = m.group(1) if m else None
+        for fn in filenames:
+            ext = fn.rsplit(".", 1)[-1].lower() if "." in fn else ""
+            if ext not in IMAGE_EXTS:
+                continue
+            p = os.path.join(dirpath, fn)
+            try:
+                st = os.stat(p)
+            except OSError:
+                continue
+            fbid = None
+            m = FN_ID_RE.search(fn)
+            if m:
+                fbid = m.group(1)
+            name_date = None
+            m = FN_DATE_RE.search(fn)
+            if m:
+                d, t = m.group(1), m.group(2)
+                name_date = f"{d[:4]}-{d[4:6]}-{d[6:8]} {t[:2]}:{t[2:4]}:{t[4:6]}"
+            files.append({"path": os.path.join(rel_dir, fn), "name": fn, "size": st.st_size,
+                          "mtime": st.st_mtime, "fbid": fbid, "name_date": name_date,
+                          "album_set": album_set})
+            if len(files) >= 50000:
+                break
+    value = {"root": root, "count": len(files), "files": files}
+    _files_cache["value"] = value
+    return value
+
+
+@app.get("/api/files")
+def files_endpoint(refresh: int = 0):
+    return scan_downloads(refresh=bool(refresh))
+
+
+def _safe_path(rel):
+    """Resolve `rel` under DOWNLOADS_DIR; only image files, no traversal."""
+    root = os.path.realpath(DOWNLOADS_DIR)
+    full = os.path.realpath(os.path.join(root, rel))
+    if full != root and not full.startswith(root + os.sep):
+        return None
+    if not os.path.isfile(full):
+        return None
+    if full.rsplit(".", 1)[-1].lower() not in IMAGE_EXTS:
+        return None
+    return full
+
+
+@app.get("/api/file")
+def file_endpoint(path: str = ""):
+    full = _safe_path(path)
+    if not full:
+        raise HTTPException(404)
+    return FileResponse(full)
+
+
+@app.get("/api/exif")
+def exif_endpoint(path: str = ""):
+    """EXIF DateTimeOriginal + fs mtime + filename date for one file.
+
+    state: synced (|mtime - exif| <= 2s) / mismatch / no_exif (script not run)."""
+    full = _safe_path(path)
+    if not full:
+        raise HTTPException(404)
+    st = os.stat(full)
+    dto = None
+    try:
+        from PIL import Image
+        with Image.open(full) as im:
+            ex = im.getexif()
+            # DateTimeOriginal lives in the Exif sub-IFD (0x8769) on real files,
+            # but getexif() only merges IFD0 -> check both
+            dto = ex.get(36867) or ex.get_ifd(0x8769).get(36867) or None
+    except Exception:
+        dto = None
+    name_date = None
+    m = FN_DATE_RE.search(os.path.basename(full))
+    if m:
+        d, t = m.group(1), m.group(2)
+        name_date = f"{d[:4]}-{d[4:6]}-{d[6:8]} {t[:2]}:{t[2:4]}:{t[4:6]}"
+    state = "no_exif"
+    diff_s = None
+    if dto:
+        try:
+            exif_ts = datetime.strptime(dto, "%Y:%m:%d %H:%M:%S").replace(tzinfo=timezone.utc).timestamp()
+            diff_s = round(st.st_mtime - exif_ts, 3)
+            state = "synced" if abs(diff_s) <= 2 else "mismatch"
+        except ValueError:
+            state = "no_exif"
+    return {"path": path, "mtime": st.st_mtime, "exif": dto, "name_date": name_date,
+            "state": state, "diff_s": diff_s}
+
+
+@app.get("/api/export")
+def export():
+    t, _ = get_tree()
+    payload = {
+        "exported_at": datetime.now(timezone.utc).isoformat(),
+        "log_file": LOG_FILE,
+        "albums_file": ALBUMS_FILE,
+        "tree": t,
+        "albums_overview": albums_overview(),
+        "files": scan_downloads(),
+    }
+    return JSONResponse(payload, headers={
+        "Content-Disposition": 'attachment; filename="web-dashboard-export.json"'})
+
+
+# ---------------------------------------------------------------- misc
 
 @app.get("/api/raw")
 def raw():
