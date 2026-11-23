@@ -9,9 +9,6 @@ on:
 jobs:
   webui:
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: web-ui-logs
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -28,8 +25,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Build web-ui-logs image
-        run: docker build -t web-ui-logs:ci ./web-ui-logs
+      - name: Build the image (build context = repo root)
+        run: docker build -t web-dashboard:ci .
       - name: Validate compose.example.yml
         run: |
           pip install pyyaml
@@ -38,7 +35,7 @@ jobs:
           doc = yaml.safe_load(open("compose.example.yml"))
           svc = doc["services"]["webui"]
           assert "ports" not in svc, "webui must not publish ports"
-          assert svc["build"] == "./web-ui-logs"
+          assert svc["build"] == "./web-dashboard", svc["build"]
           assert "caddy" in svc["networks"]
           assert doc["networks"]["caddy"]["external"] is True
           assert svc["environment"]["LOG_FILE"] == "/downloads/logs/fb-dl.log"

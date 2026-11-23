@@ -1,54 +1,40 @@
-# fb-dl log dashboard (`web-ui-logs/`)
+# web-dashboard — live log viewer for gallery-dl (fb-dl)
 
-A small **self-contained Docker image** that serves a web UI to follow a gallery-dl
-container's log file live and track album progress. It publishes **no port**: it is
-meant to sit behind **Caddy** on a private Docker network.
+This repo is the **content of the `web-dashboard/` folder** of your gallery-dl
+project: a self-contained Docker image (Dockerfile at the repo root) that serves a
+web UI to follow the `fb-dl` container's log file live and track album progress.
+It publishes **no port** — it is served by **Caddy** on a private Docker network.
 
-## How to deploy it next to your existing gallery-dl setup
+## Expected layout
 
-Your `compose.yml`, `config/`, `downloads-2/` stay **out of git** and untouched. From this
-repo, copy only the `web-ui-logs/` folder into your gallery-dl project directory:
+```
+./gallery-dl/                     <- compose project directory (your own, out of git)
+├── compose.yml                   <- your compose: fb-dl + webui (snippet: compose.example.yml)
+├── config/                       <- gallery-dl.conf, fb-cookies.txt, albums.txt (never commit)
+├── downloads-2/                  <- downloads + logs/fb-dl.log
+└── web-dashboard/                <- THIS repo (the build context of the webui service)
+    ├── Dockerfile
+    ├── app.py  tailer.py  static/  requirements*.txt  test_*.py
+    └── compose.example.yml       <- snippet to paste into ../compose.yml
+```
+
+If you ever `git init` the parent `gallery-dl/` project, add `config/` and
+`downloads-2/` to its `.gitignore` (cookies + downloaded media must stay out of git).
+
+## Quickstart
 
 ```bash
-cp -r web-ui-logs /path/to/your/gallery-dl-project/
+cd gallery-dl
+git clone https://github.com/lamarch/test-gallery-dl-logs.git web-dashboard
+# paste the `webui` service from web-dashboard/compose.example.yml into your
+# compose.yml (under the existing `services:` key) + the top-level `networks: caddy: external: true`
+# Caddyfile:  logs.example.tld { reverse_proxy fb-dl-dashboard:8081 }
+
+docker compose up -d --build webui   # builds ./web-dashboard and starts the dashboard
+docker compose up -d fb-dl            # your scraper, unchanged
 ```
 
-Then declare the service in your own compose, next to your existing `fb-dl` service
-(`compose.example.yml` in this repo is a ready-to-paste reference):
-
-```yaml
-services:
-  fb-dl: ...                 # your existing service, unchanged
-  webui:
-    build: ./web-ui-logs
-    container_name: fb-dl-dashboard
-    restart: unless-stopped
-    environment:
-      LOG_FILE: /downloads/logs/fb-dl.log   # = output.logfile.path in gallery-dl.conf
-      ALBUMS_FILE: /config/albums.txt       # the -I input file
-      MAX_RENDER_LINES: "20000"             # optional: browser DOM cap
-    volumes:
-      - ./downloads-2:/downloads:ro         # same mount as fb-dl, read-only
-      - ./config:/config:ro                 # for albums.txt (contains cookies: never commit it)
-    networks:
-      - caddy
-
-networks:
-  caddy:
-    external: true
-```
-
-And in your Caddyfile:
-
-```
-logs.example.tld {
-    reverse_proxy fb-dl-dashboard:8081
-}
-```
-
-```bash
-docker compose up -d --build webui
-```
+Then open `https://logs.example.tld`. `docker compose logs -f fb-dl` still works.
 
 ## Features
 
@@ -57,39 +43,37 @@ docker compose up -d --build webui
   live via SSE (`/api/stream`). The DOM is capped at `MAX_RENDER_LINES` (oldest lines
   dropped, a notice is shown); the search box reports match counts over the **whole
   file** (`/api/search`).
-- **Album tracking** from your `-I` input file (`albums.txt`): URLs commented out by
-  gallery-dl (`# url`) = **done**; URLs seen in the log (`Starting …Job for '<url>'`)
-  but not done = **incomplete** (in progress or failed); the rest = **not started**.
-  Endpoint: `GET /api/albums`, panel in the UI header.
+- **Album tracking** from your `-I` input file (`albums.txt`) crossed with the log
+  (`GET /api/albums` + UI panel): lines commented out by gallery-dl (`# url`) =
+  **done**; URLs seen in the log (`Starting …Job for '<url>'`) but not done =
+  **incomplete**; the rest = **not started**.
+- **Scraping rejection detection**: lines matching anti-bot / rejection patterns are
+  counted as `rejections` in `GET /api/stats` and highlighted in the UI with a red
+  banner (click it to show only those lines). Patterns based on gallery-dl 1.32.21's
+  Facebook extractor: `You've been temporarily blocked from viewing images.`,
+  `AuthRequired` / `AuthorizationError` / `AuthenticationError` / `Invalid login
+  credentials` / `cookies needed`, `ChallengeError` / captcha names, `HttpError`
+  401/403/429, `429 Too Many Requests`, `This content isn't available`. If a
+  rejection message you hit is not detected, paste the exact log line and the pattern
+  will be added.
 - Level coloring + filters (debug / info / warning / error / other), text filter,
-  pause, auto-scroll, counters (lines, jobs, warnings, errors, file size), raw log
-  download (`/api/raw`).
-
-### Scraping rejection detection
-
-Lines matching common anti-bot / rejection patterns are counted as `rejections` in
-`GET /api/stats` and highlighted in the UI with a red banner (click it to show only
-those lines). Patterns are based on gallery-dl 1.32.21's Facebook extractor and
-exception classes: `You've been temporarily blocked from viewing images.`,
-`AuthRequired` / `AuthorizationError` / `AuthenticationError` / `Invalid login
-credentials` / `cookies needed`, `ChallengeError` / captcha names, `HttpError`
-with status 401/403/429, `429 Too Many Requests`, `This content isn't available`.
-If a rejection message you hit is not detected, paste the exact log line and the
-pattern will be added.
+  pause, auto-scroll, counters (lines, jobs, warnings, errors, rejections, file size),
+  raw log download (`/api/raw`).
 
 Log line format handled (verified against gallery-dl 1.32.21 output):
 `[2026-11-22 18:40:12] [facebook][debug] …` and the default `[facebook][debug] …`;
 legacy non-interpolated lines (`[%(asctime)s][%(levelname)s] …`) are shown as "other".
 
-## Environment variables
+## Environment variables (service `webui` in your compose)
 
 | Var | Default | Description |
 |---|---|---|
-| `LOG_FILE` | `/downloads/logs/fb-dl.log` | log file to tail (must match `output.logfile.path`, via the `/downloads` mount) |
+| `LOG_FILE` | `/downloads/logs/fb-dl.log` | log file to tail (must match `output.logfile.path` in `config/gallery-dl.conf`) |
 | `ALBUMS_FILE` | `/config/albums.txt` | `-I` input file for album status; if missing, the albums panel is hidden |
 | `CHUNK_LINES` | `5000` | lines per chunk when reading history |
 | `MAX_RENDER_LINES` | `20000` | max lines kept in the browser DOM |
 | `TAIL_LINES` | `500` | default N for `/api/logs?tail=N` |
+| `SCAN_MAX_BYTES` | `0` (whole file) | if > 0, `/api/stats`, `/api/search` and album-start detection only scan the last N bytes of the log (`truncated: true` is reported) |
 
 ## API
 
@@ -101,26 +85,31 @@ legacy non-interpolated lines (`[%(asctime)s][%(levelname)s] …`) are shown as 
 | `GET /api/stream?since=OFFSET` | SSE stream of new lines |
 | `GET /api/search?q=…&limit=N` | search the whole file, returns total count + first matches |
 | `GET /api/albums` | album list with status (`done` / `incomplete` / `not_started`) + counts |
-| `GET /api/stats` | counters (lines, jobs, errors, warnings, downloads, skips) |
+| `GET /api/stats` | counters (lines, jobs, errors, warnings, rejections, downloads, skips) |
 | `GET /api/status` | existence / size / mtime of the log file |
 | `GET /api/raw` | raw log file (download) |
 
 ## Notes
 
-- With `mode: "a"` in gallery-dl.conf the log accumulates across runs — rotate or purge
-  `downloads-2/logs/fb-dl.log` from time to time.
-- If you change `output.logfile.path` in `config/gallery-dl.conf`, update `LOG_FILE`.
+- With `mode: "a"` in gallery-dl.conf the log accumulates across runs with no rotation.
+  Browsing (`/api/logs`) always reads the whole file in chunks, but `/api/stats` and
+  `/api/search` scan it in one pass — on a very large file that gets slow. Either rotate
+  the file from time to time (logrotate with `copytruncate` works: the app detects the
+  truncation live) or set `SCAN_MAX_BYTES` to scan only the tail (e.g. `268435456` =
+  last 256 MiB; responses then carry `truncated: true`).
+- If you change `output.logfile.path` in `config/gallery-dl.conf`, update `LOG_FILE`
+  in your compose.
 - `fb-dl` runs as `1000:1000`; the webui container (root) can read the log without issues.
 
 ## Development / tests
 
 ```bash
-cd web-ui-logs
 python -m venv .venv && . .venv/bin/activate
 pip install -r requirements.txt -r requirements-dev.txt
 python -m unittest test_tailer test_api -v
 LOG_FILE=/tmp/fb-dl.log ALBUMS_FILE=/tmp/albums.txt uvicorn app:app --port 8081
 ```
 
-CI (`.github/workflows/ci.yml`) runs those tests, builds the Docker image and validates
-`compose.example.yml` (including "no published ports").
+CI (`.github/workflows/ci.yml`) runs those tests, builds the image from the repo root
+and validates `compose.example.yml` (no `ports`, `build: ./web-dashboard`, external
+caddy network).

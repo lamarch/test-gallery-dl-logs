@@ -88,6 +88,20 @@ class ApiTests(unittest.TestCase):
         self.assertEqual(data["skips"], 0)
         self.assertEqual(data["rejections"], 2)
 
+    def test_stats_scan_cap(self):
+        import app as app_module
+        old = app_module.SCAN_MAX_BYTES
+        app_module._stats_cache.update(key=None, value=None)
+        app_module.SCAN_MAX_BYTES = 60
+        try:
+            data = self.client.get("/api/stats").json()
+            self.assertTrue(data["truncated"])
+            self.assertLess(data["scanned_bytes"], os.path.getsize(LOG_FILE))
+            self.assertLess(data["lines"], 5)
+        finally:
+            app_module.SCAN_MAX_BYTES = old
+            app_module._stats_cache.update(key=None, value=None)
+
     def test_status(self):
         data = self.client.get("/api/status").json()
         self.assertTrue(data["exists"])
