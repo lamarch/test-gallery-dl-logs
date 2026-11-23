@@ -3,7 +3,8 @@ import json
 import os
 import re
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
 
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
@@ -28,7 +29,14 @@ PHOTOS_PAGE_SIZE = int(os.environ.get("PHOTOS_PAGE_SIZE", "500"))
 TREE_MAX_PHOTOS = int(os.environ.get("TREE_MAX_PHOTOS", "50000"))
 # Log timestamps are UTC; the UI displays them in this IANA timezone
 # (set via compose env, e.g. DISPLAY_TZ=Europe/Paris). Exposed by /api/status.
+# EXIF DateTimeOriginal has no timezone: it is interpreted in DISPLAY_TZ
+# (unless the file carries OffsetTimeOriginal), matching what an external
+# script that syncs mtime <- EXIF in local time would produce.
 DISPLAY_TZ = os.environ.get("DISPLAY_TZ") or os.environ.get("TZ") or "UTC"
+# Optional album display names: one "<a.set_id or url> <name>" per line.
+ALBUMS_NAMES_FILE = os.environ.get("ALBUMS_NAMES_FILE", "/config/albums-names.txt")
+# |mtime - exif| tolerance (seconds) for the exif "synced" state.
+EXIF_TOLERANCE_S = float(os.environ.get("EXIF_TOLERANCE_S", "2"))
 # Disk index (/api/files) cache TTL in seconds; 0 = rescan on every call.
 FILES_CACHE_TTL = float(os.environ.get("FILES_CACHE_TTL", "30"))
 # Max files indexed by scan_downloads (walk stops early, "truncated" reported).
@@ -238,6 +246,56 @@ def _read_albums_file(path):
     return albums
 
 
+_names_cache = {"key": None, "value": None}
+
+
+def _album_names():
+    """Optional display names from ALBUMS_NAMES_FILE: '<a.set_id or url> <name>'."""
+    try:
+        st = os.stat(ALBUMS_NAMES_FILE)
+        key = (st.st_size, st.st_mtime_ns)
+    except OSError:
+        return {}
+    if _names_cache["key"] == key:
+        return _names_cache["value"]
+    names = {}
+    with open(ALBUMS_NAMES_FILE, encoding="utf-8", errors="replace") as f:
+        for raw in f:
+            line = raw.strip()
+            if not line or line.startswith("#"):
+                continue
+            parts = line.split(None, 1)
+            if len(parts) == 2:
+                names[parts[0]] = parts[1].strip()
+    _names_cache.update(key=key, value=names)
+    return names
+
+
+def _dir_names():
+    """Fallback album names from download dir names: '.../<title> (a.<id>)'."""
+    out = {}
+    for f in scan_downloads()["files"]:
+        s = f.get("album_set")
+        if not s or s in out:
+            continue
+        base = os.path.basename(os.path.dirname(f["path"]))
+        m = re.match(r"^(.*?)\s*\(a\.[0-9]+\)$", base)
+        if m and m.group(1) and not m.group(1).isdigit():
+            out[s] = m.group(1)
+    return out
+
+
+def _album_display_name(url, set_id, names, dirnames):
+    if set_id:
+        if names.get("a." + set_id):
+            return names["a." + set_id]
+        if dirnames.get("a." + set_id):
+            return dirnames["a." + set_id]
+    if names.get(url):
+        return names[url]
+    return None
+
+
 _started_cache = {"key": None, "value": None}
 
 
@@ -268,6 +326,8 @@ def albums():
         return {"available": False, "path": ALBUMS_FILE, "albums": [],
                 "counts": empty, "current": None}
     started = _started_urls()
+    names = _album_names()
+    dirnames = _dir_names()
     out = []
     counts = {"done": 0, "incomplete": 0, "not_started": 0}
     current = None
@@ -280,8 +340,10 @@ def albums():
             status = "not_started"
         if not done and current is None:
             current = url
+        set_id, _ = _parse_url_ids(url)
         counts[status] += 1
-        out.append({"url": url, "status": status})
+        out.append({"url": url, "status": status,
+                    "name": _album_display_name(url, set_id, names, dirnames)})
     counts["total"] = len(out)
     return {"available": True, "path": ALBUMS_FILE, "albums": out,
             "counts": counts, "current": current}
@@ -333,6 +395,8 @@ def parse_log():
     to (start_byte, end_byte) ranges in the log file."""
     parsed_albums = _read_albums_file(ALBUMS_FILE) or []
     done_urls = {u for u, d in parsed_albums if d}
+    names = _album_names()
+    dirnames = _dir_names()
 
     sessions = []
     spans = {}
@@ -393,6 +457,7 @@ def parse_log():
                 url = m.group(1)
                 set_id, vanity = _parse_url_ids(url)
                 cur_a = {"idx": ai, "url": url, "set_id": set_id, "vanity": vanity,
+                         "name": _album_display_name(url, set_id, names, dirnames),
                          "link": _album_link(url, set_id), "start": ts, "end": ts,
                          "start_off": start, "end_off": end, "photos": [], "photos_n": 0,
                          "photos_seen": 0, "photos_truncated": False,
@@ -501,9 +566,26 @@ def get_tree():
     return value
 
 
+def _annotate_disk(t):
+    """Cross log-downloaded photos with files actually on disk, per album."""
+    disk_fbids_by_set = {}
+    for f in scan_downloads()["files"]:
+        if f.get("album_set") and f.get("fbid"):
+            disk_fbids_by_set.setdefault(f["album_set"], set()).add(f["fbid"])
+    for s in t["sessions"]:
+        for a in s["albums"]:
+            key = "a." + a["set_id"] if a.get("set_id") else None
+            disk = disk_fbids_by_set.get(key, set()) if key else set()
+            a["on_disk"] = len(disk)
+            a["missing_on_disk"] = sum(
+                1 for p in a["photos"]
+                if p.get("status") == "downloaded" and p.get("fbid") and p["fbid"] not in disk)
+
+
 @app.get("/api/tree")
 def tree():
     t, _ = get_tree()
+    _annotate_disk(t)
     return t
 
 
@@ -569,6 +651,9 @@ def album_detail(s: int, a: int, offset: int = Query(default=0, ge=0),
         if full is not None:
             photos_src = full
     by_fbid = {f["fbid"]: f for f in scan_downloads()["files"] if f.get("fbid")}
+    disk_key = "a." + alb["set_id"] if alb.get("set_id") else None
+    disk_fbids = {f["fbid"] for f in scan_downloads()["files"]
+                  if f.get("fbid") and f.get("album_set") == disk_key} if disk_key else set()
     photos = []
     for p in photos_src[offset:offset + limit]:
         q = dict(p)
@@ -585,6 +670,11 @@ def album_detail(s: int, a: int, offset: int = Query(default=0, ge=0),
         photos.append(q)
     out = {k: v for k, v in alb.items() if k != "photos"}
     out["photos"] = photos
+    # log-vs-disk comparison summary for this album
+    out["on_disk"] = len(disk_fbids)
+    out["missing_on_disk"] = sorted(
+        p["fbid"] for p in photos_src
+        if p.get("status") == "downloaded" and p.get("fbid") and p["fbid"] not in disk_fbids)
     return out
 
 
@@ -652,11 +742,14 @@ def albums_overview():
             key = a["set_id"] or a["url"]
             e = agg.setdefault(key, {
                 "key": key, "url": a["url"], "set_id": a["set_id"], "vanity": a["vanity"],
+                "name": a.get("name"),
                 "link": a["link"], "sessions": [], "session_details": [], "status": a["status"],
                 "end_reason": a.get("end_reason"), "photos": 0, "files": 0, "bytes": 0,
-                "sleeps": 0.0, "errors": 0, "rejections": 0,
+                "sleeps": 0.0, "errors": 0, "rejections": 0, "_log_fbids": set(),
                 "on_disk": len(by_set.get("a." + a["set_id"], [])) if a["set_id"] else 0})
             e["sessions"].append(s["idx"])
+            e["_log_fbids"].update(p["fbid"] for p in a["photos"]
+                                  if p.get("status") == "downloaded" and p.get("fbid"))
             e["session_details"].append({
                 "session": s["idx"], "album_idx": a["idx"],
                 "session_start": s["start"], "start": a["start"], "end": a["end"],
@@ -675,6 +768,12 @@ def albums_overview():
         e["retried"] = len(set(e["sessions"])) > 1
         # recompute from the aggregated counters, not from the first session
         e["status"], e["end_reason"] = _album_status(e, done_set)
+        # log-vs-disk comparison for this album
+        key = "a." + e["set_id"] if e.get("set_id") else None
+        disk = {f["fbid"] for f in by_set.get(key, [])} if key else set()
+        e["missing_on_disk"] = len(e["_log_fbids"] - disk)   # downloaded in log, not on disk
+        e["extra_on_disk"] = len(disk - e["_log_fbids"])      # on disk, never downloaded in log
+        del e["_log_fbids"]
     out.sort(key=lambda e: (e["sessions"][0] if e["sessions"] else 0))
     return {"albums": out, "done_urls": t["done_urls"]}
 
@@ -738,7 +837,17 @@ def scan_downloads(refresh=False):
 
 @app.get("/api/files")
 def files_endpoint(refresh: int = 0):
-    return scan_downloads(refresh=bool(refresh))
+    val = scan_downloads(refresh=bool(refresh))
+    # annotate each file: was its fbid seen as downloaded in the parsed log?
+    t, _ = get_tree()
+    downloaded = {p["fbid"] for s in t["sessions"] for a in s["albums"]
+                  for p in a["photos"] if p.get("status") == "downloaded" and p.get("fbid")}
+    in_log = 0
+    for f in val["files"]:
+        f["in_log"] = bool(f.get("fbid")) and f["fbid"] in downloaded
+        in_log += 1 if f["in_log"] else 0
+    val["in_log_count"] = in_log
+    return val
 
 
 def _safe_path(rel):
@@ -762,23 +871,47 @@ def file_endpoint(path: str = ""):
     return FileResponse(full)
 
 
+def _exif_epoch(dto, offset):
+    """Epoch of an EXIF DateTimeOriginal. EXIF carries no timezone: use the
+    file's OffsetTimeOriginal (tag 36881, e.g. '+02:00') if present, else
+    DISPLAY_TZ (local time — what a script syncing mtime <- EXIF in local
+    time produces), else UTC."""
+    dt = datetime.strptime(dto, "%Y:%m:%d %H:%M:%S")
+    if offset:
+        m = re.match(r"([+-])(\d{2}):(\d{2})", str(offset))
+        if m:
+            delta = timedelta(hours=int(m.group(2)), minutes=int(m.group(3)))
+            if m.group(1) == "-":
+                delta = -delta
+            return dt.replace(tzinfo=timezone(delta)).timestamp()
+    try:
+        return dt.replace(tzinfo=ZoneInfo(DISPLAY_TZ)).timestamp()
+    except Exception:
+        return dt.replace(tzinfo=timezone.utc).timestamp()
+
+
 @app.get("/api/exif")
 def exif_endpoint(path: str = ""):
     """EXIF DateTimeOriginal + fs mtime + filename date for one file.
 
-    state: synced (|mtime - exif| <= 2s) / mismatch / no_exif (script not run)."""
+    state: synced (|mtime - exif| <= EXIF_TOLERANCE_S) / mismatch / no_exif
+    (script not run). EXIF time is interpreted via OffsetTimeOriginal if
+    present, else in DISPLAY_TZ (not UTC — EXIF has no timezone)."""
     full = _safe_path(path)
     if not full:
         raise HTTPException(404)
     st = os.stat(full)
     dto = None
+    off = None
     try:
         from PIL import Image
         with Image.open(full) as im:
             ex = im.getexif()
             # DateTimeOriginal lives in the Exif sub-IFD (0x8769) on real files,
             # but getexif() only merges IFD0 -> check both
-            dto = ex.get(36867) or ex.get_ifd(0x8769).get(36867) or None
+            sub = ex.get_ifd(0x8769)
+            dto = ex.get(36867) or sub.get(36867) or None
+            off = sub.get(36881) or None  # OffsetTimeOriginal
     except Exception:
         dto = None
     name_date = None
@@ -788,15 +921,17 @@ def exif_endpoint(path: str = ""):
         name_date = f"{d[:4]}-{d[4:6]}-{d[6:8]} {t[:2]}:{t[2:4]}:{t[4:6]}"
     state = "no_exif"
     diff_s = None
+    exif_epoch = None
     if dto:
         try:
-            exif_ts = datetime.strptime(dto, "%Y:%m:%d %H:%M:%S").replace(tzinfo=timezone.utc).timestamp()
-            diff_s = round(st.st_mtime - exif_ts, 3)
-            state = "synced" if abs(diff_s) <= 2 else "mismatch"
+            exif_epoch = _exif_epoch(dto, off)
+            diff_s = round(st.st_mtime - exif_epoch, 3)
+            state = "synced" if abs(diff_s) <= EXIF_TOLERANCE_S else "mismatch"
         except ValueError:
             state = "no_exif"
-    return {"path": path, "mtime": st.st_mtime, "exif": dto, "name_date": name_date,
-            "state": state, "diff_s": diff_s}
+    return {"path": path, "mtime": st.st_mtime, "exif": dto, "exif_epoch": exif_epoch,
+            "offset": off, "name_date": name_date, "state": state, "diff_s": diff_s,
+            "tz": DISPLAY_TZ}
 
 
 @app.get("/api/export")

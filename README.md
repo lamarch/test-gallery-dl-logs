@@ -150,7 +150,9 @@ but not downloaded (failed download, anti-bot rejection, "already downloaded" sk
 | `SCAN_MAX_BYTES` | `0` (whole file) | if > 0, `/api/stats`, `/api/search`, album-start detection and the tree parser only scan the last N bytes (`truncated: true` reported). The example compose sets 128 MiB since the log grows unbounded in `mode: "a"` |
 | `PHOTOS_PAGE_SIZE` | `500` | photos per page in the Tree tab ("load more" pagination) |
 | `TREE_MAX_PHOTOS` | `50000` | RAM cap on photo nodes materialized in the parsed tree (`<= 0` = unlimited). Beyond the cap, photos are still counted and `/api/album/{s}/{a}` re-parses the album's log span on demand (per-photo log spans keep working) |
-| `DISPLAY_TZ` | `TZ` env, else `UTC` | IANA timezone used to **display** the log timestamps (logs are UTC). The UI parses them as UTC and renders in this zone via `Intl`; exposed by `/api/status` as `timezone` |
+| `DISPLAY_TZ` | `TZ` env, else `UTC` | IANA timezone used to **display** the log timestamps (logs are UTC) **and to interpret EXIF `DateTimeOriginal`** (EXIF has no timezone; `OffsetTimeOriginal` wins if present). UI renders via `Intl`; exposed by `/api/status` as `timezone` |
+| `ALBUMS_NAMES_FILE` | `/config/albums-names.txt` | optional album display names, one `<a.set_id or url> <name>` per line (fallback: the download dir title `…/<title> (a.<id>)`). Mount only that single file if you use it |
+| `EXIF_TOLERANCE_S` | `2` | `|mtime − EXIF|` tolerance in seconds for the `synced` state |
 | `FILES_CACHE_TTL` | `30` | seconds the disk index (`/api/files`) is cached before an automatic rescan, so new downloads show as "on disk" without a manual refresh (`0` = rescan every call, `?refresh=1` forces) |
 | `FILES_MAX` | `50000` | max files indexed by the disk scan (walk stops early, `truncated: true` reported) |
 
@@ -166,14 +168,14 @@ but not downloaded (failed download, anti-bot rejection, "already downloaded" sk
 | `GET /api/search?q=…&limit=N` | search the scanned region, total count + first matches |
 | `GET /api/albums` | albums.txt statuses (done/incomplete/not_started) + counts + `current` |
 | `GET /api/stats` | counters incl. `files`, `current_album`, `current_album_files`, `last_sleep`, `rejections`, `truncated` |
-| `GET /api/tree` | parsed session → album → photo tree (`runs`, `done_urls`) |
-| `GET /api/album/{s}/{a}?offset=O&limit=N` | one album + its photos (paginated, merged with the disk index: `on_disk`, `path`, `link_photo`) |
+| `GET /api/tree` | parsed session → album → photo tree (`runs`, `done_urls`, album `name`, `on_disk`, `missing_on_disk`) |
+| `GET /api/album/{s}/{a}?offset=O&limit=N` | one album + its photos (paginated, merged with the disk index: per-photo `on_disk`/`path`/`link_photo`, plus album-level `on_disk` and `missing_on_disk` = fbids downloaded in the log but absent on disk) |
 | `GET /api/album/{s}/{a}/logs` | raw log lines of that album |
 | `GET /api/photo/{s}/{a}/{p}/logs` | raw log lines of that photo |
-| `GET /api/albums_overview` | album-centric cross-session aggregation: `session_details` lists each session with its own stats (`album_idx`, `photos_n`, `files`, `status`, …) so the UI can show per-session photos; plus `retried`, `on_disk`, totals |
-| `GET /api/files?refresh=1` | disk index of `DOWNLOADS_DIR` (images only, `logs/` skipped) |
+| `GET /api/albums_overview` | album-centric cross-session aggregation: `name`, `session_details` (per-session stats so the UI can show per-session photos), `retried`, `on_disk`, `missing_on_disk`, `extra_on_disk`, totals |
+| `GET /api/files?refresh=1` | disk index of `DOWNLOADS_DIR` (images only, `logs/` skipped), each file annotated `in_log` (fbid seen as downloaded in the log) + `in_log_count` |
 | `GET /api/file?path=REL` | serve one image (traversal-safe) |
-| `GET /api/exif?path=REL` | EXIF DateTimeOriginal vs mtime → `synced` / `mismatch` / `no_exif` + filename date |
+| `GET /api/exif?path=REL` | EXIF DateTimeOriginal (Exif sub-IFD, `OffsetTimeOriginal` if present, else `DISPLAY_TZ`) vs mtime → `synced` / `mismatch` / `no_exif` + filename date + `exif_epoch` |
 | `GET /api/export` | JSON attachment: tree + albums overview + files |
 | `GET /api/status` | existence / size / mtime of the log file + `timezone` (DISPLAY_TZ) |
 | `GET /api/raw` | raw log file (download) |
@@ -195,6 +197,21 @@ but not downloaded (failed download, anti-bot rejection, "already downloaded" sk
   webui service environment to display every timestamp (log lines, tree, chips, files
   mtime) in that timezone, formatted `DD/MM/YY HH:MM:SS` (fr-FR); raw API/JSON-export
   values stay UTC.
+- **EXIF check**: `DateTimeOriginal` carries no timezone, so it is interpreted in
+  `DISPLAY_TZ` (or the file's `OffsetTimeOriginal` when present) — this matches a
+  script that syncs `mtime <- EXIF` in local time. Reading it as UTC made every file
+  show `mismatch` with a constant tz-offset error. `no_exif` still means the script
+  did not run on that file.
+- **Log-vs-disk comparison** (the primary per-photo check): every photo parsed as
+  `downloaded` from the logs is cross-referenced with the disk index by fbid —
+  `on_disk` per photo/album, `missing_on_disk` (in logs, not on disk), `extra_on_disk`
+  (on disk, not in logs), and `in_log` per file in the Files tab (with a
+  "not in logs" filter).
+- **Album names**: put `<a.set_id or url> <display name>` lines in
+  `config/albums-names.txt` (mounted as a single file) — fallback is the download
+  directory title (`…/<title> (a.<id>)`). Names show in the Tree and Albums tabs.
+- The Tree tab auto-expands only the **most recent** session and album; everything
+  else stays collapsed.
 
 ## Development / tests
 

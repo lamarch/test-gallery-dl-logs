@@ -133,6 +133,7 @@ select{background:var(--bg);border:1px solid var(--border);color:var(--fg);borde
       <option value="synced">exif synced</option>
       <option value="mismatch">exif mismatch</option>
       <option value="no_exif">script not run (no exif)</option>
+      <option value="not_in_log">not in logs (extra on disk)</option>
     </select>
     <input id="files-q" type="search" placeholder="name / fbid…">
     <button id="files-refresh">Rescan disk</button>
@@ -358,22 +359,27 @@ function renderTree(t) {
   const el = $("view-tree");
   el.innerHTML = "";
   if (!t.sessions.length) { el.innerHTML = "<p class='stat'>no sessions parsed yet</p>"; return; }
+  const lastSession = t.sessions[t.sessions.length - 1];
   for (const s of t.sessions) {
     const det = document.createElement("details");
-    det.open = true;
+    det.open = s === lastSession;  // auto-expand only the most recent session
     const sum = document.createElement("summary");
     sum.innerHTML = "🔄 <b>session #" + s.idx + "</b> — started " + fmtTs(s.start) +
       " → " + fmtTs(s.end) + " &nbsp;" + statsLine(s);
     det.appendChild(sum);
     const box = document.createElement("div");
     box.className = "tree-indent";
+    const lastAlbum = s.albums[s.albums.length - 1];
     for (const a of s.albums) {
       const ad = document.createElement("details");
+      ad.open = s === lastSession && a === lastAlbum;  // auto-expand only the most recent album
       const asum = document.createElement("summary");
-      asum.innerHTML = "📁 <b>album " + a.idx + "</b> " +
+      asum.innerHTML = "📁 <b>" + (a.name ? esc(a.name) + " — " : "") + "album " + a.idx + "</b> " +
         (a.link ? '<a href="' + esc(a.link) + '" target="_blank" rel="noopener">' + esc(trunc(a.url, 60)) + "</a>" : esc(trunc(a.url, 60))) +
         " &nbsp;" + badge(a.status, a.status) +
         (a.set_id ? ' <span class="stat">set=a.' + esc(a.set_id) + "</span>" : "") +
+        (a.on_disk != null ? ' <span class="stat">💾 on disk <b>' + a.on_disk + "</b>" +
+          (a.missing_on_disk ? ' · ⚠ missing <b>' + a.missing_on_disk + "</b>" : "") + "</span>" : "") +
         ' <span class="stat">' + fmtTs(a.start) + " → " + fmtTs(a.end) + " — " + esc(a.end_reason || "") + "</span>" +
         "<br>" + statsLine(a);
       ad.appendChild(asum);
@@ -474,12 +480,14 @@ function renderOverview(o) {
     const card = document.createElement("div");
     card.className = "card";
     card.id = "album-" + (a.set_id || encodeURIComponent(a.url));
-    card.innerHTML = "<h3>📁 " +
+    card.innerHTML = "<h3>📁 " + (a.name ? "<b>" + esc(a.name) + "</b> — " : "") +
       (a.link ? '<a href="' + esc(a.link) + '" target="_blank" rel="noopener">' + esc(trunc(a.url, 70)) + "</a>" : esc(trunc(a.url, 70))) +
       " " + badge(a.status, a.status) + (a.retried ? " " + badge("retried", "retried") : "") +
       (a.set_id ? ' <span class="stat">set=a.' + esc(a.set_id) + (a.vanity ? " · vanity=" + esc(a.vanity) : "") + "</span>" : "") +
       "</h3><div class='stat'>sessions: " + a.sessions.map(x => "#" + x).join(", ") +
       " · " + statsLine(a) + " · 💾 on disk: <b>" + a.on_disk + "</b> files" +
+      (a.missing_on_disk ? " · ⚠ <b>" + a.missing_on_disk + "</b> missing on disk" : "") +
+      (a.extra_on_disk ? " · ➕ <b>" + a.extra_on_disk + "</b> extra on disk" : "") +
       (a.end_reason ? " · end: " + esc(a.end_reason) : "") + "</div>";
     for (const sd of (a.session_details || [])) {
       const det = document.createElement("details");
@@ -552,6 +560,7 @@ function renderFiles() {
   for (const f of filesData.files) {
     if (albumSel.value && f.album_set !== albumSel.value) continue;
     if (q && !(f.name.toLowerCase().includes(q) || (f.fbid || "").includes(q))) continue;
+    if (curState === "not_in_log" && f.in_log) continue;
     matched++;
     if (shown >= 2000) break;
     shown++;
@@ -562,6 +571,7 @@ function renderFiles() {
       '<td class="stat">' + esc(f.name_date || "?") + "</td>" +
       '<td class="stat">' + esc(fmtEpoch(f.mtime)) + "</td>" +
       '<td class="stat">' + esc(f.album_set || "?") + "</td>" +
+      '<td class="stat">' + (f.in_log ? "✓ in log" : '<span style="color:var(--warning)">✗ not in log</span>') + "</td>" +
       '<td><button class="exif-btn">exif</button><span class="exif-res"></span></td>';
     const btn = row.querySelector(".exif-btn");
     const res = row.querySelector(".exif-res");
@@ -584,7 +594,9 @@ function renderFiles() {
   }
   el.appendChild(table);
   $("files-count").textContent = filesData.count + " file(s) on disk" +
-    (filesData.truncated ? " (index capped at FILES_MAX)" : "") + ", " + matched + " shown";
+    (filesData.truncated ? " (index capped at FILES_MAX)" : "") +
+    (filesData.in_log_count != null ? ", " + filesData.in_log_count + " in logs" : "") +
+    ", " + matched + " shown";
   if (!shown) el.innerHTML = "<p class='stat'>no files</p>";
 }
 $("files-album").addEventListener("change", renderFiles);

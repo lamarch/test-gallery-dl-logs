@@ -2,6 +2,7 @@ import os
 import tempfile
 import unittest
 from datetime import datetime, timezone
+from zoneinfo import ZoneInfo
 
 BASE = tempfile.mkdtemp()
 LOG_FILE = os.path.join(BASE, "fb-dl.log")
@@ -13,6 +14,8 @@ SET_ID = "29493527130293174"
 ALBUM_DIR = os.path.join(DOWNLOADS_DIR, "facebook", "user42", f"album (a.{SET_ID})")
 SYNCED_JPG = "20250506_082802_29493495376963016.jpg"
 NOEXIF_JPG = "20250506_082803_29493523296960224.jpg"
+MISMATCH_JPG = "20250506_082805_555444333222111.jpg"
+NAMES_FILE = os.path.join(BASE, "albums-names.txt")
 SYNCED_REL = f"facebook/user42/album (a.{SET_ID})/{SYNCED_JPG}"
 NOEXIF_REL = f"facebook/user42/album (a.{SET_ID})/{NOEXIF_JPG}"
 
@@ -56,18 +59,30 @@ os.makedirs(ALBUM_DIR)
 
 from PIL import Image  # noqa: E402
 
-_exif_ts = datetime(2025, 5, 6, 8, 28, 2, tzinfo=timezone.utc).timestamp()
+with open(NAMES_FILE, "w", encoding="utf-8") as f:
+    f.write(f"a.{SET_ID} My Test Album\n")
+    f.write("https://example.com/never\tNever Album\n")
+
+# EXIF DateTimeOriginal carries no timezone: the app interprets it in
+# DISPLAY_TZ (Europe/Paris here), like a script syncing mtime <- EXIF in local time
+_exif_ts = datetime(2025, 5, 6, 8, 28, 2, tzinfo=ZoneInfo("Europe/Paris")).timestamp()
 _im = Image.new("RGB", (16, 16), (200, 100, 50))
 _ex = Image.Exif()
 _ex.get_ifd(0x8769)[36867] = "2025:05:06 08:28:02"  # DateTimeOriginal (Exif sub-IFD)
 _im.save(os.path.join(ALBUM_DIR, SYNCED_JPG), "JPEG", exif=_ex)
-os.utime(os.path.join(ALBUM_DIR, SYNCED_JPG), (_exif_ts, _exif_ts))  # script synced mtime
+os.utime(os.path.join(ALBUM_DIR, SYNCED_JPG), (_exif_ts, _exif_ts))  # synced
 Image.new("RGB", (16, 16), (1, 2, 3)).save(os.path.join(ALBUM_DIR, NOEXIF_JPG), "JPEG")
+_ex2 = Image.Exif()
+_ex2.get_ifd(0x8769)[36867] = "2025:05:06 08:28:05"
+Image.new("RGB", (16, 16), (9, 9, 9)).save(os.path.join(ALBUM_DIR, MISMATCH_JPG), "JPEG", exif=_ex2)
+_bad = _exif_ts + 3 + 3600  # exif(08:28:05 Paris) + 1h -> mismatch
+os.utime(os.path.join(ALBUM_DIR, MISMATCH_JPG), (_bad, _bad))
 
 os.environ["LOG_FILE"] = LOG_FILE
 os.environ["ALBUMS_FILE"] = ALBUMS_FILE
 os.environ["DOWNLOADS_DIR"] = DOWNLOADS_DIR
 os.environ["DISPLAY_TZ"] = "Europe/Paris"
+os.environ["ALBUMS_NAMES_FILE"] = NAMES_FILE
 
 from fastapi.testclient import TestClient  # noqa: E402
 
@@ -170,6 +185,9 @@ class ApiTests(unittest.TestCase):
         self.assertEqual(by_url["https://example.com/done"], "done")
         self.assertEqual(by_url[SET_URL], "incomplete")
         self.assertEqual(by_url["https://example.com/never"], "not_started")
+        names = {a["url"]: a.get("name") for a in data["albums"]}
+        self.assertEqual(names[SET_URL], "My Test Album")
+        self.assertEqual(names["https://example.com/never"], "Never Album")
 
     def test_stats_counts(self):
         data = self.client.get("/api/stats").json()
@@ -252,6 +270,11 @@ class TreeApiTests(unittest.TestCase):
         self.assertEqual(s0["albums"][0]["link"],
                          f"https://www.facebook.com/media/set/?set=a.{SET_ID}&type=3")
         a0 = s0["albums"][0]
+        self.assertEqual(a0["name"], "My Test Album")     # from albums-names.txt
+        self.assertEqual(a0["on_disk"], 3)                # log-vs-disk annotation
+        self.assertEqual(a0["missing_on_disk"], 0)        # its only photo is on disk
+        a1t = s1["albums"][0]
+        self.assertEqual(a1t["missing_on_disk"], 1)       # fbid ...083626912 downloaded in s1, not on disk
         self.assertEqual(a0["photos_n"], 1)
         self.assertEqual(a0["files"], 1)
         self.assertEqual(a0["bytes"], 392546)
@@ -282,6 +305,10 @@ class TreeApiTests(unittest.TestCase):
         d = self.client.get("/api/album/0/0").json()
         self.assertEqual(d["photos_n"], 1)
         self.assertEqual(len(d["photos"]), 1)
+        self.assertEqual(d["on_disk"], 3)
+        self.assertEqual(d["missing_on_disk"], [])        # s0's photo is on disk
+        d1 = self.client.get("/api/album/1/0").json()
+        self.assertEqual(d1["missing_on_disk"], ["29493523083626912"])  # downloaded, not on disk
         p = d["photos"][0]
         self.assertTrue(p["on_disk"])
         self.assertEqual(p["path"], SYNCED_REL)
@@ -374,12 +401,15 @@ class TreeApiTests(unittest.TestCase):
         self.assertIn("start", sds[1])
         self.assertEqual(a["sessions"], [0, 1])
         self.assertTrue(a["retried"])
+        self.assertEqual(a["name"], "My Test Album")
         self.assertEqual(a["photos"], 3)
         self.assertEqual(a["files"], 2)            # 2 CDN payloads (L6 + L18)
         self.assertEqual(a["bytes"], 392546 + 54321)
         self.assertEqual(a["errors"], 2)
         self.assertEqual(a["rejections"], 1)
-        self.assertEqual(a["on_disk"], 2)
+        self.assertEqual(a["on_disk"], 3)
+        self.assertEqual(a["missing_on_disk"], 1)  # downloaded in log, not on disk
+        self.assertEqual(a["extra_on_disk"], 2)    # on disk, not downloaded in log
         self.assertEqual(a["link"], f"https://www.facebook.com/media/set/?set=a.{SET_ID}&type=3")
 
 
@@ -390,33 +420,38 @@ class FilesApiTests(unittest.TestCase):
 
     def test_files_index_skips_logs_dir(self):
         d = self.client.get("/api/files").json()
-        self.assertEqual(d["count"], 2)
+        self.assertEqual(d["count"], 3)
         names = {f["name"] for f in d["files"]}
-        self.assertEqual(names, {SYNCED_JPG, NOEXIF_JPG})
-        expected_dates = {SYNCED_JPG: "2025-05-06 08:28:02", NOEXIF_JPG: "2025-05-06 08:28:03"}
+        self.assertEqual(names, {SYNCED_JPG, NOEXIF_JPG, MISMATCH_JPG})
+        expected_dates = {SYNCED_JPG: "2025-05-06 08:28:02", NOEXIF_JPG: "2025-05-06 08:28:03",
+                          MISMATCH_JPG: "2025-05-06 08:28:05"}
         for f in d["files"]:
             self.assertEqual(f["album_set"], f"a.{SET_ID}")
             self.assertEqual(f["name_date"], expected_dates[f["name"]])
             self.assertRegex(f["fbid"], r"^\d{6,}$")
+        # log-vs-disk: only the fbid downloaded in the log is "in_log"
+        in_log = {f["name"]: f["in_log"] for f in d["files"]}
+        self.assertEqual(in_log, {SYNCED_JPG: True, NOEXIF_JPG: False, MISMATCH_JPG: False})
+        self.assertEqual(d["in_log_count"], 1)
 
     def test_files_refresh(self):
         d = self.client.get("/api/files", params={"refresh": 1}).json()
-        self.assertEqual(d["count"], 2)
+        self.assertEqual(d["count"], 3)
         self.assertFalse(d["truncated"])
 
     def test_files_cache_ttl_and_cap(self):
         from PIL import Image as _Img
         extra = os.path.join(ALBUM_DIR, "20250506_082804_777666555444333.jpg")
         try:
-            self.client.get("/api/files", params={"refresh": 1})  # populate cache (2 files)
+            self.client.get("/api/files", params={"refresh": 1})  # populate cache (3 files)
             _Img.new("RGB", (8, 8)).save(extra, "JPEG")
-            d = self.client.get("/api/files").json()             # cached: still 2
-            self.assertEqual(d["count"], 2)
+            d = self.client.get("/api/files").json()             # cached: still 3
+            self.assertEqual(d["count"], 3)
             old_ttl = app_module.FILES_CACHE_TTL
             app_module.FILES_CACHE_TTL = 0                        # TTL=0 -> rescan
             try:
                 d = self.client.get("/api/files").json()
-                self.assertEqual(d["count"], 3)                   # new file visible
+                self.assertEqual(d["count"], 4)                   # new file visible
                 old_max = app_module.FILES_MAX
                 app_module.FILES_MAX = 1
                 try:
@@ -429,7 +464,7 @@ class FilesApiTests(unittest.TestCase):
                 app_module.FILES_CACHE_TTL = old_ttl
         finally:
             os.remove(extra)
-            self.client.get("/api/files", params={"refresh": 1})  # restore cache (count 2)
+            self.client.get("/api/files", params={"refresh": 1})  # restore cache (count 3)
 
     def test_file_serving_and_traversal(self):
         r = self.client.get("/api/file", params={"path": SYNCED_REL})
@@ -439,13 +474,22 @@ class FilesApiTests(unittest.TestCase):
         self.assertEqual(self.client.get("/api/file", params={"path": "logs/fb-dl.log"}).status_code, 404)
         self.assertEqual(self.client.get("/api/file", params={"path": "nope.jpg"}).status_code, 404)
 
-    def test_exif_synced_and_no_exif(self):
+    def test_exif_states(self):
+        # EXIF interpreted in DISPLAY_TZ (Europe/Paris), not UTC: mtime was set
+        # from the EXIF in local time -> synced (a UTC interpretation would be
+        # off by exactly the tz offset -> the "everything is mismatch" bug)
         d = self.client.get("/api/exif", params={"path": SYNCED_REL}).json()
         self.assertEqual(d["state"], "synced")
         self.assertEqual(d["exif"], "2025:05:06 08:28:02")
+        self.assertEqual(d["tz"], "Europe/Paris")
         self.assertEqual(d["name_date"], "2025-05-06 08:28:02")
         self.assertIsNotNone(d["diff_s"])
         self.assertLessEqual(abs(d["diff_s"]), 2)
+        self.assertIsNotNone(d["exif_epoch"])
+        mismatch_rel = f"facebook/user42/album (a.{SET_ID})/{MISMATCH_JPG}"
+        d = self.client.get("/api/exif", params={"path": mismatch_rel}).json()
+        self.assertEqual(d["state"], "mismatch")
+        self.assertAlmostEqual(d["diff_s"], 3600, places=1)
         d = self.client.get("/api/exif", params={"path": NOEXIF_REL}).json()
         self.assertEqual(d["state"], "no_exif")  # script did not run on this file
         self.assertIsNone(d["exif"])
@@ -458,7 +502,7 @@ class FilesApiTests(unittest.TestCase):
         self.assertIn("attachment", r.headers["content-disposition"])
         d = r.json()
         self.assertEqual(d["tree"]["runs"], 2)
-        self.assertEqual(d["files"]["count"], 2)
+        self.assertEqual(d["files"]["count"], 3)
         self.assertEqual(len(d["albums_overview"]["albums"]), 1)
 
 
