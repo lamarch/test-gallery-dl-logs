@@ -15,7 +15,6 @@ ALBUM_DIR = os.path.join(DOWNLOADS_DIR, "facebook", "user42", f"Vacances 2025 (a
 SYNCED_JPG = "20250506_082802_29493495376963016.jpg"
 NOEXIF_JPG = "20250506_082803_29493523296960224.jpg"
 MISMATCH_JPG = "20250506_082805_555444333222111.jpg"
-NAMES_FILE = os.path.join(BASE, "albums-names.txt")
 ALBUM_REL = f"facebook/user42/Vacances 2025 (a.{SET_ID})"
 SYNCED_REL = f"{ALBUM_REL}/{SYNCED_JPG}"
 NOEXIF_REL = f"{ALBUM_REL}/{NOEXIF_JPG}"
@@ -64,10 +63,6 @@ os.makedirs(ALBUM_DIR)
 
 from PIL import Image  # noqa: E402
 
-with open(NAMES_FILE, "w", encoding="utf-8") as f:
-    f.write(f"a.{SET_ID} My Test Album\n")
-    f.write("https://example.com/never\tNever Album\n")
-
 # EXIF DateTimeOriginal carries no timezone: the app interprets it in
 # DISPLAY_TZ (Europe/Paris here), like a script syncing mtime <- EXIF in local time
 _exif_ts = datetime(2025, 5, 6, 8, 28, 2, tzinfo=ZoneInfo("Europe/Paris")).timestamp()
@@ -87,7 +82,6 @@ os.environ["LOG_FILE"] = LOG_FILE
 os.environ["ALBUMS_FILE"] = ALBUMS_FILE
 os.environ["DOWNLOADS_DIR"] = DOWNLOADS_DIR
 os.environ["DISPLAY_TZ"] = "Europe/Paris"
-os.environ["ALBUMS_NAMES_FILE"] = NAMES_FILE
 
 from fastapi.testclient import TestClient  # noqa: E402
 
@@ -191,10 +185,9 @@ class ApiTests(unittest.TestCase):
         self.assertEqual(by_url[SET_URL], "incomplete")
         self.assertEqual(by_url["https://example.com/never"], "not_started")
         names = {a["url"]: a.get("name") for a in data["albums"]}
-        # primary source = the download dir title gallery-dl created
+        # album name = the download dir title gallery-dl created
         self.assertEqual(names[SET_URL], "Vacances 2025")
-        # names file used as fallback when no dir exists
-        self.assertEqual(names["https://example.com/never"], "Never Album")
+        self.assertIsNone(names["https://example.com/never"])  # no dir -> no name
 
     def test_stats_counts(self):
         data = self.client.get("/api/stats").json()
@@ -280,8 +273,11 @@ class TreeApiTests(unittest.TestCase):
         self.assertEqual(a0["name"], "Vacances 2025")     # download dir title (as downloaded)
         self.assertEqual(a0["on_disk"], 3)                # log-vs-disk annotation
         self.assertEqual(a0["missing_on_disk"], 0)        # its only photo is on disk
+        self.assertEqual(a0["states"], {"downloaded": 1})
         a1t = s1["albums"][0]
         self.assertEqual(a1t["missing_on_disk"], 1)       # fbid ...083626912 downloaded in s1, not on disk
+        # failed-but-on-disk and pending-but-on-disk -> on_disk_only; downloaded-not-on-disk -> missing
+        self.assertEqual(a1t["states"], {"on_disk_only": 2, "missing_on_disk": 1})
         self.assertEqual(a0["photos_n"], 1)
         self.assertEqual(a0["files"], 1)
         self.assertEqual(a0["bytes"], 392546)
@@ -320,9 +316,15 @@ class TreeApiTests(unittest.TestCase):
         d1 = self.client.get("/api/album/1/0").json()
         self.assertEqual(d1["missing_on_disk"], ["29493523083626912"])  # downloaded, not on disk
         by_fbid = {p["fbid"]: p for p in d1["photos"]}
-        # pending in log but on disk -> upgraded to downloaded in album detail
+        # pending in log but on disk (skipped, file from a previous run) -> on_disk_only
         self.assertTrue(by_fbid["555444333222111"]["on_disk"])
-        self.assertEqual(by_fbid["555444333222111"]["status"], "downloaded")
+        self.assertEqual(by_fbid["555444333222111"]["status"], "pending")
+        self.assertEqual(by_fbid["555444333222111"]["state"], "on_disk_only")
+        # failed in log but file on disk -> on_disk_only (the error is still in errors)
+        self.assertEqual(by_fbid["29493523296960224"]["state"], "on_disk_only")
+        # downloaded in log but not on disk -> missing_on_disk
+        self.assertEqual(by_fbid["29493523083626912"]["state"], "missing_on_disk")
+        self.assertEqual(d1["states"], {"on_disk_only": 2, "missing_on_disk": 1})
         p = d["photos"][0]
         self.assertTrue(p["on_disk"])
         self.assertEqual(p["path"], SYNCED_REL)
@@ -424,6 +426,7 @@ class TreeApiTests(unittest.TestCase):
         self.assertEqual(a["on_disk"], 3)
         self.assertEqual(a["missing_on_disk"], 1)  # downloaded in log, not on disk
         self.assertEqual(a["extra_on_disk"], 2)    # on disk, not downloaded in log
+        self.assertEqual(a["states"], {"downloaded": 1, "on_disk_only": 2, "missing_on_disk": 1})
         self.assertEqual(a["link"], f"https://www.facebook.com/media/set/?set=a.{SET_ID}&type=3")
 
 
