@@ -85,6 +85,13 @@ summary:hover{background:#e9ecef}
 select{background:#fff;border:1px solid #ced4da;color:var(--fg);border-radius:.375rem;padding:.375rem .75rem;font:inherit}
 .card{background:var(--panel);border:1px solid var(--border);border-radius:.5rem;padding:12px 16px;margin-bottom:12px;box-shadow:0 1px 2px rgba(16,24,40,.05)}
 .card h3{margin:0 0 8px 0;font-size:16px}
+
+.keystats{white-space:nowrap;margin-right:6px}
+.kpi{font-size:15px;font-weight:700;color:var(--fg)}
+.kpi.ok{color:var(--ok)}
+.pbar{display:inline-block;width:110px;height:14px;background:#e9ecef;border:1px solid var(--border);border-radius:2rem;position:relative;overflow:hidden;vertical-align:middle;margin-right:8px}
+.pbar-fill{position:absolute;left:0;top:0;bottom:0;background:var(--ok)}
+.pbar-txt{position:absolute;inset:0;text-align:center;font-size:10px;line-height:13px;font-weight:700;color:#212529}
 </style>
 </head>
 <body>
@@ -158,6 +165,7 @@ let MAX_NODES = 20000, offset = 0, firstOffset = 0, hasMore = false;
 let paused = false, pending = [], autoScroll = true, onlyRej = false;
 let viewMode = "raw", allLines = [], searchTimer = null;
 let tab = "log";
+let lastChipsHtml = "";
 
 const LEVEL_RE = /^(?:\[[^\]]*\]\s*)?\[[^\]]*\]\[(debug|info|warning|error|critical)\]/;
 const PROGRESS_RE = /^\[\d+\/\d+\]/;
@@ -377,6 +385,19 @@ function stateLine(st) {
     ["pending", "⏳", "Page vue, rien de téléchargé, pas sur disque"]];
   return order.filter(([k]) => st[k]).map(([k, ic, ti]) => ic + " " + badge(k, k, ti) + " <b>" + st[k] + "</b>").join(" ");
 }
+function progressBar(done, total) {
+  const pct = total > 0 ? Math.min(100, Math.round(100 * done / total)) : 0;
+  return '<span class="pbar" title="' + done + ' / ' + total + ' = ' + pct + '%"><span class="pbar-fill" style="width:' + pct + '%"></span><span class="pbar-txt">' + pct + '%</span></span>';
+}
+function keyStats(o) {
+  const pn = o.photos_n != null ? o.photos_n : (o.photos || 0);  // overview entries use "photos"
+  const done = o.on_disk != null ? o.on_disk : o.files;
+  return '<span class="keystats">' + progressBar(done, pn)
+    + ' <span class="kpi" title="pages photo vues dans les logs (GET /photo/?fbid=…)">' + pn + ' photos</span>'
+    + (o.on_disk != null ? ' <span class="kpi ok" title="fichiers présents sur le disque (match par fbid)">' + o.on_disk + ' on disk</span>' : '')
+    + ' <span class="kpi" title="téléchargés vus dans les logs (payload CDN, HTTP < 400 + octets)">' + o.files + ' dl</span>'
+    + '</span>';
+}
 function renderTree(t) {
   const el = $("view-tree");
   el.innerHTML = "";
@@ -387,7 +408,7 @@ function renderTree(t) {
     det.open = s === lastSession;  // auto-expand only the most recent session
     const sum = document.createElement("summary");
     sum.innerHTML = "🔄 <b>session #" + s.idx + "</b> — started " + fmtTs(s.start) +
-      " → " + fmtTs(s.end) + " &nbsp;" + statsLine(s);
+      " → " + fmtTs(s.end) + " &nbsp;" + keyStats(s) + ' <span class="stat">' + statsLine(s) + "</span>";
     det.appendChild(sum);
     const box = document.createElement("div");
     box.className = "tree-indent";
@@ -401,7 +422,7 @@ function renderTree(t) {
         " &nbsp;" + badge(a.status, a.status) +
         (a.set_id ? ' <span class="stat">set=a.' + esc(a.set_id) + "</span>" : "") +
         ' <span class="stat">' + fmtTs(a.start) + " → " + fmtTs(a.end) + " — " + esc(a.end_reason || "") + "</span>" +
-        "<br>" + statsLine(a) + (a.states ? ' <span class="stat">' + stateLine(a.states) + "</span>" : "");
+        "<br>" + keyStats(a) + ' <span class="stat">' + statsLine(a) + "</span>" + (a.states ? ' <span class="stat">' + stateLine(a.states) + "</span>" : "");
       ad.appendChild(asum);
       const abox = document.createElement("div");
       abox.className = "tree-indent";
@@ -507,7 +528,7 @@ function renderOverview(o) {
       " " + badge(a.status, a.status) + (a.retried ? " " + badge("retried", "retried") : "") +
       (a.set_id ? ' <span class="stat">set=a.' + esc(a.set_id) + (a.vanity ? " · vanity=" + esc(a.vanity) : "") + "</span>" : "") +
       "</h3><div class='stat'>sessions: " + a.sessions.map(x => "#" + x).join(", ") +
-      " · " + statsLine(a) + (a.states ? ' · ' + stateLine(a.states) : "") +
+      " · " + keyStats(a) + ' <span class="stat">' + statsLine(a) + "</span>" + (a.states ? ' · ' + stateLine(a.states) : "") +
       (a.missing_on_disk ? " · ⚠ <b>" + a.missing_on_disk + "</b> missing on disk" : "") +
       (a.extra_on_disk ? " · ➕ <b>" + a.extra_on_disk + "</b> extra on disk" : "") +
       (a.end_reason ? " · end: " + esc(a.end_reason) : "") + "</div>";
@@ -516,7 +537,7 @@ function renderOverview(o) {
       const sum = document.createElement("summary");
       sum.innerHTML = "🔄 session <b>#" + sd.session + "</b> · " + fmtTs(sd.start) + " → " + fmtTs(sd.end) +
         " " + badge(sd.status, sd.status) +
-        ' <span class="stat">' + sd.photos_n + " photos · " + sd.files + " files · " + humanSize(sd.bytes) +
+        " " + keyStats(sd) + ' <span class="stat">' + humanSize(sd.bytes) +
         (sd.sleeps ? " · 💤 " + sd.sleeps.toFixed(1) + "s" : "") +
         (sd.errors ? " · ✖ " + sd.errors : "") + (sd.rejections ? " · 🚫 " + sd.rejections : "") + "</span>";
       det.appendChild(sum);
@@ -720,7 +741,8 @@ async function poll() {
     chips.push('<span class="chip ' + (s.errors ? "err" : "") + '">✖ <b>' + s.errors + "</b></span>");
     chips.push('<span class="chip ' + (nrej ? "err" : "") + '">🚫 <b>' + nrej + "</b></span>");
     if (st.exists) chips.push('<span class="chip">last activity <b>' + fmtEpoch(st.mtime) + "</b> (" + esc(TZ) + ")</span>");
-    statusbar.innerHTML = chips.join("");
+    const chipsHtml = chips.join("");
+    if (chipsHtml !== lastChipsHtml) { statusbar.innerHTML = chipsHtml; lastChipsHtml = chipsHtml; }
     const chipAlbum = $("chip-album");
     if (chipAlbum) chipAlbum.addEventListener("click", () => goTab("albums"));
   } catch (e) {}
