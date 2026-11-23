@@ -1,0 +1,25 @@
+# Example declaration for YOUR OWN compose.yml (kept out of git).
+# Copy the `webui` service into the compose file that already runs fb-dl,
+# next to your existing `fb-dl` service. This standalone file is only a
+# reference and is validated by CI.
+#
+# The webui publishes NO port: it is reachable only through the external
+# `caddy` network (see the Caddyfile snippet in README.md).
+services:
+  webui:
+    build: ./web-ui-logs
+    container_name: fb-dl-dashboard
+    restart: unless-stopped
+    environment:
+      LOG_FILE: /downloads/logs/fb-dl.log   # output.logfile.path from gallery-dl.conf
+      ALBUMS_FILE: /config/albums.txt       # the -I input file
+      MAX_RENDER_LINES: "20000"             # optional: max lines kept in the browser DOM
+    volumes:
+      - ./downloads-2:/downloads:ro         # same mount as fb-dl, read-only
+      - ./config:/config:ro                 # for albums.txt (contains cookies: never commit it)
+    networks:
+      - caddy
+
+networks:
+  caddy:
+    external: true

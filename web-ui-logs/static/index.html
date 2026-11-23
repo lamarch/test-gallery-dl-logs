@@ -1,0 +1,294 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>fb-dl — log viewer</title>
+<style>
+:root{
+  --bg:#0d1117;--panel:#161b22;--border:#30363d;--fg:#e6edf3;--muted:#8b949e;
+  --debug:#8b949e;--info:#58a6ff;--warning:#d29922;--error:#f85149;--ok:#3fb950;
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);height:100vh;display:flex;flex-direction:column;
+  font:13px/1.5 ui-monospace,SFMono-Regular,Menlo,Consolas,"Liberation Mono",monospace}
+header{display:flex;flex-wrap:wrap;gap:8px;align-items:center;padding:8px 12px;
+  background:var(--panel);border-bottom:1px solid var(--border)}
+.title{font-weight:700;margin-right:6px}
+input[type=search]{background:var(--bg);border:1px solid var(--border);color:var(--fg);
+  border-radius:6px;padding:4px 8px;width:240px;font:inherit}
+#search-count{color:var(--muted);font-size:12px}
+button{background:var(--bg);border:1px solid var(--border);color:var(--fg);border-radius:6px;
+  padding:4px 10px;cursor:pointer;font:inherit}
+button:hover{border-color:var(--muted)}
+button.active{background:rgba(31,111,235,.25);border-color:#1f6feb}
+label.lvl{display:flex;gap:4px;align-items:center;color:var(--muted);font-size:12px;cursor:pointer;user-select:none}
+#stats{margin-left:auto;display:flex;gap:14px;align-items:center;color:var(--muted);font-size:12px;flex-wrap:wrap}
+#stats b{color:var(--fg)}
+#st-path{max-width:280px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+#dot{width:9px;height:9px;border-radius:50%;background:var(--error);display:inline-block}
+#dot.on{background:var(--ok)}
+#notice{display:none;padding:4px 12px;background:rgba(31,111,235,.15);color:var(--info);
+  border-bottom:1px solid var(--border);font-size:12px}
+#paused{display:none;padding:4px 12px;background:rgba(210,153,34,.15);color:var(--warning);
+  border-bottom:1px solid var(--border);font-size:12px}
+#albums-panel{display:none;border-bottom:1px solid var(--border);background:var(--panel);
+  max-height:40vh;overflow-y:auto;padding:6px 12px}
+#albums-panel.open{display:block}
+.alb-filters{display:flex;gap:6px;margin-bottom:6px;flex-wrap:wrap}
+.alb{white-space:pre-wrap;word-break:break-all;padding:1px 6px;border-radius:4px;cursor:pointer}
+.alb:hover{background:rgba(22,27,34,.6)}
+.alb.done{color:var(--ok)}
+.alb.incomplete{color:var(--warning)}
+.alb.not_started{color:var(--muted)}
+#log{flex:1;overflow-y:auto;padding:6px 0}
+.line{white-space:pre-wrap;word-break:break-all;padding:0 12px}
+.line:hover{background:rgba(22,27,34,.6)}
+.line.debug{color:var(--debug)}
+.line.info{color:var(--info)}
+.line.warning{color:var(--warning)}
+.line.error{color:var(--error)}
+.line.download{color:var(--ok)}
+.line.hidden{display:none}
+a{color:var(--info);text-decoration:none}
+</style>
+</head>
+<body>
+<header>
+  <span class="title">fb-dl</span>
+  <input id="search" type="search" placeholder="Search logs…">
+  <span id="search-count"></span>
+  <label class="lvl"><input type="checkbox" class="cb" data-lvl="debug" checked>debug</label>
+  <label class="lvl"><input type="checkbox" class="cb" data-lvl="info" checked>info</label>
+  <label class="lvl"><input type="checkbox" class="cb" data-lvl="warning" checked>warning</label>
+  <label class="lvl"><input type="checkbox" class="cb" data-lvl="error" checked>error</label>
+  <label class="lvl"><input type="checkbox" class="cb" data-lvl="other" checked>other</label>
+  <button id="btn-albums" style="display:none">Albums <b id="al-counts"></b></button>
+  <button id="btn-pause">⏸ Pause</button>
+  <button id="btn-scroll" class="active">↓ Auto-scroll</button>
+  <button id="btn-clear">Clear</button>
+  <a href="/api/raw" download="fb-dl.log"><button>⬇ Raw log</button></a>
+  <div id="stats">
+    <span id="dot" title="stream connection"></span>
+    <span>lines <b id="st-lines">–</b></span>
+    <span>jobs <b id="st-jobs">–</b></span>
+    <span>⚠ <b id="st-warn">–</b></span>
+    <span>✖ <b id="st-err">–</b></span>
+    <span id="st-size"></span>
+    <span id="st-path"></span>
+  </div>
+</header>
+<div id="albums-panel">
+  <div class="alb-filters">
+    <button class="alb-filter active" data-f="all">all</button>
+    <button class="alb-filter" data-f="done">✓ done</button>
+    <button class="alb-filter" data-f="incomplete">◐ incomplete</button>
+    <button class="alb-filter" data-f="not_started">○ not started</button>
+  </div>
+  <div id="albums-list"></div>
+</div>
+<div id="notice"></div>
+<div id="paused"></div>
+<div id="log"></div>
+<script>
+"use strict";
+const logEl = document.getElementById("log");
+const searchEl = document.getElementById("search");
+const searchCount = document.getElementById("search-count");
+const pausedEl = document.getElementById("paused");
+const noticeEl = document.getElementById("notice");
+const dot = document.getElementById("dot");
+const albumsPanel = document.getElementById("albums-panel");
+const albumsList = document.getElementById("albums-list");
+const CHUNK = 5000;
+let MAX_NODES = 20000;
+let offset = 0;
+let paused = false;
+let pending = [];
+let autoScroll = true;
+let albFilter = "all";
+let lastAlbums = null;
+let searchTimer = null;
+
+// "[{asctime}] [{name}][{levelname}] {message}" or "[{name}][{levelname}] {message}"
+const LEVEL_RE = /^(?:\[[^\]]*\]\s*)?\[[^\]]*\]\[(debug|info|warning|error|critical)\]/;
+const PROGRESS_RE = /^\[\d+\/\d+\]/;
+
+function levelOf(line) {
+  const m = LEVEL_RE.exec(line);
+  if (m) return m[1] === "critical" ? "error" : m[1];
+  if (!line.trim() || line.startsWith("# ") || PROGRESS_RE.test(line)) return "other";
+  return "download";
+}
+
+function isVisible(el) {
+  const q = searchEl.value.trim().toLowerCase();
+  if (q && !el.textContent.toLowerCase().includes(q)) return false;
+  let lvl = el.dataset.lvl;
+  if (lvl === "download") lvl = "other";
+  const cb = document.querySelector('.cb[data-lvl="' + lvl + '"]');
+  return cb ? cb.checked : true;
+}
+
+function appendLine(line) {
+  const lvl = levelOf(line);
+  const div = document.createElement("div");
+  div.className = "line " + lvl;
+  div.dataset.lvl = lvl;
+  div.textContent = line;
+  if (!isVisible(div)) div.classList.add("hidden");
+  logEl.appendChild(div);
+  while (logEl.childElementCount > MAX_NODES) logEl.firstChild.remove();
+  if (autoScroll && !paused) logEl.scrollTop = logEl.scrollHeight;
+}
+
+function setDot(on) { dot.classList.toggle("on", on); }
+
+function connect() {
+  const es = new EventSource("/api/stream?since=" + offset);
+  es.addEventListener("log", (ev) => {
+    const msg = JSON.parse(ev.data);
+    offset = msg.offset;
+    if (paused) {
+      pending.push(msg.line);
+      if (pending.length > MAX_NODES) pending.shift();
+      pausedEl.style.display = "block";
+      pausedEl.textContent = "⏸ Paused — " + pending.length + " new line(s) — click \"Resume\"";
+    } else {
+      appendLine(msg.line);
+    }
+  });
+  es.onopen = () => setDot(true);
+  es.onerror = () => setDot(false);
+}
+
+// Load the whole log file from byte 0, in chunks, then follow live.
+async function loadHistory() {
+  let loaded = 0;
+  try {
+    while (true) {
+      const r = await fetch("/api/logs?offset=" + offset + "&limit=" + CHUNK);
+      const data = await r.json();
+      if (offset === 0) {
+        MAX_NODES = data.max_render || MAX_NODES;
+        document.getElementById("st-path").textContent = data.path;
+        document.getElementById("st-path").title = data.path;
+      }
+      if (data.lines.length) {
+        data.lines.forEach(appendLine);
+        loaded += data.lines.length;
+      }
+      offset = data.offset;
+      if (data.eof || data.lines.length === 0 || loaded >= MAX_NODES) break;
+    }
+  } catch (e) { /* log file does not exist yet */ }
+  if (loaded >= MAX_NODES) {
+    noticeEl.style.display = "block";
+    noticeEl.textContent = "Display capped at " + MAX_NODES + " lines (oldest dropped). " +
+      "The full file is still searchable: the match count next to the search box covers the whole file.";
+  }
+  connect();
+}
+
+async function pollStats() {
+  try {
+    const s = await (await fetch("/api/stats")).json();
+    document.getElementById("st-lines").textContent = s.lines;
+    document.getElementById("st-jobs").textContent = s.jobs;
+    document.getElementById("st-warn").textContent = s.warnings;
+    document.getElementById("st-err").textContent = s.errors;
+    const st = await (await fetch("/api/status")).json();
+    document.getElementById("st-size").textContent = st.exists
+      ? (st.size / 1048576).toFixed(1) + " MiB"
+      : "no log file yet";
+  } catch (e) { /* ignore */ }
+  setTimeout(pollStats, 5000);
+}
+
+function renderAlbums() {
+  if (!lastAlbums) return;
+  albumsList.innerHTML = "";
+  for (const a of lastAlbums.albums) {
+    if (albFilter !== "all" && a.status !== albFilter) continue;
+    const div = document.createElement("div");
+    div.className = "alb " + a.status;
+    const icon = a.status === "done" ? "✓ " : a.status === "incomplete" ? "◐ " : "○ ";
+    div.textContent = icon + a.url;
+    div.title = "click to search this URL in the logs";
+    div.addEventListener("click", () => { searchEl.value = a.url; refilter(); });
+    albumsList.appendChild(div);
+  }
+}
+
+async function pollAlbums() {
+  try {
+    const a = await (await fetch("/api/albums")).json();
+    const btn = document.getElementById("btn-albums");
+    if (!a.available) {
+      btn.style.display = "none";
+    } else {
+      btn.style.display = "";
+      lastAlbums = a;
+      document.getElementById("al-counts").textContent =
+        "✓" + a.counts.done + " ◐" + a.counts.incomplete + " ○" + a.counts.not_started;
+      if (albumsPanel.classList.contains("open")) renderAlbums();
+    }
+  } catch (e) { /* ignore */ }
+  setTimeout(pollAlbums, 5000);
+}
+
+function refilter() {
+  for (const el of logEl.children) {
+    el.classList.toggle("hidden", !isVisible(el));
+  }
+}
+
+searchEl.addEventListener("input", () => {
+  refilter();
+  clearTimeout(searchTimer);
+  const q = searchEl.value.trim();
+  if (!q) { searchCount.textContent = ""; return; }
+  searchTimer = setTimeout(async () => {
+    try {
+      const s = await (await fetch("/api/search?q=" + encodeURIComponent(q) + "&limit=1")).json();
+      searchCount.textContent = s.count + " match(es) in full file";
+    } catch (e) { /* ignore */ }
+  }, 300);
+});
+document.querySelectorAll(".cb").forEach(cb => cb.addEventListener("change", refilter));
+
+document.getElementById("btn-albums").addEventListener("click", () => {
+  albumsPanel.classList.toggle("open");
+  renderAlbums();
+});
+document.querySelectorAll(".alb-filter").forEach(b => b.addEventListener("click", () => {
+  albFilter = b.dataset.f;
+  document.querySelectorAll(".alb-filter").forEach(x => x.classList.toggle("active", x === b));
+  renderAlbums();
+}));
+
+document.getElementById("btn-clear").addEventListener("click", () => { logEl.innerHTML = ""; });
+document.getElementById("btn-scroll").addEventListener("click", (e) => {
+  autoScroll = !autoScroll;
+  e.target.classList.toggle("active", autoScroll);
+  if (autoScroll) logEl.scrollTop = logEl.scrollHeight;
+});
+document.getElementById("btn-pause").addEventListener("click", (e) => {
+  paused = !paused;
+  e.target.textContent = paused ? "▶ Resume" : "⏸ Pause";
+  e.target.classList.toggle("active", paused);
+  if (!paused) {
+    pausedEl.style.display = "none";
+    const lines = pending;
+    pending = [];
+    lines.forEach(appendLine);
+    if (autoScroll) logEl.scrollTop = logEl.scrollHeight;
+  }
+});
+
+loadHistory();
+pollStats();
+pollAlbums();
+</script>
+</body>
+</html>
