@@ -23,15 +23,22 @@ def read_tail(path, max_lines=500, window=DEFAULT_WINDOW):
         return [], 0, 0
     end_offset = start + last_nl + 1
     complete = data[:last_nl]
-    start_offset = start
+    base = start
     if start > 0:
         first_nl = complete.find(b"\n")
         if first_nl == -1:
             return [], 0, 0
         complete = complete[first_nl + 1:]
-        start_offset = start + first_nl + 1
-    lines = complete.decode("utf-8", "replace").split("\n")
-    return lines[-max_lines:], end_offset, start_offset
+        base = start + first_nl + 1
+    raw = complete.split(b"\n")
+    if len(raw) > max_lines:
+        # truncated by max_lines: start_offset must point at the first KEPT line
+        raw = raw[-max_lines:]
+        start_offset = end_offset - sum(len(b) + 1 for b in raw)
+    else:
+        start_offset = base
+    lines = [b.decode("utf-8", "replace") for b in raw]
+    return lines, end_offset, start_offset
 
 
 def read_range(path, offset=0, max_lines=5000, max_bytes=4 * 1024 * 1024):
@@ -103,6 +110,23 @@ def read_range_back(path, end_offset, max_lines=2000, window=DEFAULT_WINDOW):
         start_offset = start
     lines = [b.decode("utf-8", "replace") for b in raw]
     return lines, start_offset, start_offset > 0
+
+
+def read_span(path, start, end):
+    """Return all lines fully contained in the byte range [start, end)."""
+    try:
+        size = os.path.getsize(path)
+    except OSError:
+        return []
+    start = max(0, min(start, size))
+    end = max(start, min(end, size))
+    with open(path, "rb") as f:
+        f.seek(start)
+        data = f.read(end - start)
+    lines = data.decode("utf-8", "replace").split("\n")
+    if lines and lines[-1] == "":
+        lines.pop()
+    return lines
 
 
 class Follower:

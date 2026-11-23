@@ -3,7 +3,7 @@ import shutil
 import tempfile
 import unittest
 
-from tailer import Follower, read_range, read_range_back, read_tail
+from tailer import Follower, read_range, read_range_back, read_span, read_tail
 
 
 class ReadTailTests(unittest.TestCase):
@@ -30,7 +30,8 @@ class ReadTailTests(unittest.TestCase):
         lines, end, start = read_tail(self.path, 2)
         self.assertEqual(lines, ["bbb", "ccc"])
         self.assertEqual(end, os.path.getsize(self.path))
-        self.assertEqual(start, 0)
+        # truncated by max_lines: start_offset = first KEPT line, not 0
+        self.assertEqual(start, 4)
 
     def test_no_trailing_newline(self):
         self.write("aaa\nbbb\nccc")
@@ -59,7 +60,36 @@ class ReadTailTests(unittest.TestCase):
         self.assertEqual(lines[0], "line 1500")
         self.assertEqual(lines[-1], "line 1999")
         self.assertEqual(end, os.path.getsize(self.path))
-        self.assertEqual(start, 0)
+        # truncated by max_lines (whole file fits in the window):
+        # start_offset must point at the first KEPT line, not at 0
+        self.assertGreater(start, 0)
+        self.assertEqual(start, end - sum(len(l) + 1 for l in lines))
+
+    def test_truncated_tail_continuity(self):
+        # "load earlier" pages backwards from start_offset; paging forward from
+        # start_offset must resume exactly at the first tail line
+        with open(self.path, "w", encoding="utf-8") as f:
+            for i in range(2000):
+                f.write(f"line {i}\n")
+        lines, end, start = read_tail(self.path, 500)
+        fwd, off, eof = read_range(self.path, start, 5)
+        self.assertEqual(fwd[0], lines[0])
+        self.assertEqual(fwd[:5], lines[:5])
+        self.assertFalse(eof)
+
+    def test_window_and_max_lines_truncation(self):
+        with open(self.path, "w", encoding="utf-8") as f:
+            for i in range(2000):
+                f.write(f"line {i}\n")
+        size = os.path.getsize(self.path)
+        lines, end, start = read_tail(self.path, 100, window=4000)
+        self.assertEqual(len(lines), 100)
+        self.assertEqual(lines[-1], "line 1999")
+        self.assertEqual(end, size)
+        self.assertGreater(start, 0)
+        self.assertEqual(start, end - sum(len(l) + 1 for l in lines))
+        fwd, _, _ = read_range(self.path, start, 3)
+        self.assertEqual(fwd, lines[:3])
 
 
 class ReadRangeTests(unittest.TestCase):
@@ -156,6 +186,39 @@ class ReadRangeBackTests(unittest.TestCase):
         self.assertEqual(len(lines), 10)
         self.assertEqual(start, 0)
         self.assertFalse(has_more)
+
+
+class ReadSpanTests(unittest.TestCase):
+    def setUp(self):
+        self.dir = tempfile.mkdtemp()
+        self.path = os.path.join(self.dir, "test.log")
+        # 10 lines "l0".."l9", 3 bytes each = 30 bytes total
+        with open(self.path, "w", encoding="utf-8") as f:
+            for i in range(10):
+                f.write(f"l{i}\n")
+
+    def tearDown(self):
+        shutil.rmtree(self.dir, ignore_errors=True)
+
+    def test_missing_file(self):
+        self.assertEqual(read_span(self.dir + "/nope.log", 0, 100), [])
+
+    def test_full_file(self):
+        self.assertEqual(read_span(self.path, 0, 30),
+                         [f"l{i}" for i in range(10)])
+
+    def test_middle_span(self):
+        # bytes 6..18 -> lines l2..l5 (spans are byte ranges at line boundaries)
+        self.assertEqual(read_span(self.path, 6, 18), ["l2", "l3", "l4", "l5"])
+
+    def test_clamped_to_size(self):
+        self.assertEqual(read_span(self.path, 24, 10**9), ["l8", "l9"])
+        self.assertEqual(read_span(self.path, 10**9, 10**9 + 5), [])
+
+    def test_end_mid_line_includes_partial(self):
+        # byte range ending inside line l5 ("l5\n" = bytes 15..17)
+        self.assertEqual(read_span(self.path, 15, 17), ["l5"])
+        self.assertEqual(read_span(self.path, 15, 18), ["l5"])  # trailing \n popped
 
 
 class FollowerTests(unittest.TestCase):
