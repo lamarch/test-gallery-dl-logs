@@ -425,8 +425,19 @@ def parse_log():
                         cur_a["bytes"] += nbytes
                     if cur_s is not None:
                         cur_s["bytes"] += nbytes
+                    # a media payload from the CDN = one file actually written.
+                    # ("Adjusting filename extension" only appears when the
+                    # extension CHANGES, e.g. avif->jpg, so it undercounts)
+                    if "fbcdn.net" in line:
+                        if cur_p is not None:
+                            cur_p["status"] = "downloaded"
+                        if cur_a is not None:
+                            cur_a["files"] += 1
+                        if cur_s is not None:
+                            cur_s["files"] += 1
             dm = DOWNLOAD_RE.search(line)
             if dm:
+                # only carries the final filename, NOT a file count
                 fname = dm.group(1)
                 if cur_p is not None:
                     cur_p["status"] = "downloaded"
@@ -434,10 +445,6 @@ def parse_log():
                     fm = FN_ID_RE.search(fname)
                     if fm and not cur_p["fbid"]:
                         cur_p["fbid"] = fm.group(1)
-                if cur_a is not None:
-                    cur_a["files"] += 1
-                if cur_s is not None:
-                    cur_s["files"] += 1
             fm = FAILED_RE.search(line)
             if fm and cur_p is not None:
                 cur_p["status"] = "failed"
@@ -523,6 +530,8 @@ def _photos_from_album_span(spans, s, a):
         rm = RESP_RE.search(line)
         if rm and cur is not None and int(rm.group(1)) < 400 and rm.group(2):
             cur["bytes"] += int(rm.group(2))
+            if "fbcdn.net" in line:
+                cur["status"] = "downloaded"
         dm = DOWNLOAD_RE.search(line)
         if dm and cur is not None:
             cur["status"] = "downloaded"
@@ -854,7 +863,9 @@ def stats():
         counts["lines"] += 1
         if REJECTION_RE.search(line):
             counts["rejections"] += 1
-        if DOWNLOAD_RE.search(line):
+        rm = RESP_RE.search(line)
+        if rm and int(rm.group(1)) < 400 and rm.group(2) and "fbcdn.net" in line:
+            # one media payload downloaded = one file written to disk
             files += 1
             files_since_job += 1
         m = STARTED_RE.search(line)
