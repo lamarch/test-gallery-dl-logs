@@ -2,13 +2,14 @@ import asyncio
 import json
 import os
 import re
+import time
 from datetime import datetime, timezone
 
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
-from tailer import Follower, read_range, read_range_back, read_span, read_tail
+from tailer import Follower, read_range, read_range_back, read_tail
 
 LOG_FILE = os.environ.get("LOG_FILE", "/downloads/logs/fb-dl.log")
 ALBUMS_FILE = os.environ.get("ALBUMS_FILE", "/config/albums.txt")
@@ -25,6 +26,13 @@ PHOTOS_PAGE_SIZE = int(os.environ.get("PHOTOS_PAGE_SIZE", "500"))
 # Beyond the cap, photos are still counted and /api/album/{s}/{a} re-parses the
 # album's log span on demand.
 TREE_MAX_PHOTOS = int(os.environ.get("TREE_MAX_PHOTOS", "50000"))
+# Log timestamps are UTC; the UI displays them in this IANA timezone
+# (set via compose env, e.g. DISPLAY_TZ=Europe/Paris). Exposed by /api/status.
+DISPLAY_TZ = os.environ.get("DISPLAY_TZ") or os.environ.get("TZ") or "UTC"
+# Disk index (/api/files) cache TTL in seconds; 0 = rescan on every call.
+FILES_CACHE_TTL = float(os.environ.get("FILES_CACHE_TTL", "30"))
+# Max files indexed by scan_downloads (walk stops early, "truncated" reported).
+FILES_MAX = int(os.environ.get("FILES_MAX", "50000"))
 STATIC_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static")
 
 # gallery-dl log line formats:
@@ -76,7 +84,7 @@ def index():
 
 @app.get("/api/logs")
 def get_logs(
-    offset: int = 0,
+    offset: int = Query(default=0, ge=0),
     limit: int = Query(default=CHUNK_LINES, ge=1, le=100000),
     tail: int = Query(default=0, ge=0, le=100000, description="if > 0: last N lines"),
     before: int = Query(default=0, ge=0, description="if > 0: N lines ending at this byte offset"),
@@ -539,7 +547,7 @@ def _photos_from_album_span(spans, s, a):
 
 
 @app.get("/api/album/{s}/{a}")
-def album_detail(s: int, a: int, offset: int = 0,
+def album_detail(s: int, a: int, offset: int = Query(default=0, ge=0),
                  limit: int = Query(default=PHOTOS_PAGE_SIZE, ge=1, le=5000)):
     t, spans = get_tree()
     try:
@@ -572,22 +580,50 @@ def album_detail(s: int, a: int, offset: int = 0,
 
 
 def _span_lines(spans, key, offset, limit):
+    """Stream the byte span, counting lines and keeping only the requested
+    window (bounded memory even for huge album spans)."""
     span = spans.get(key)
     if span is None:
         raise HTTPException(404, "not found")
-    lines = read_span(LOG_FILE, span[0], span[1])
-    return {"lines": lines[offset:offset + limit], "total": len(lines), "offset": offset}
+    try:
+        size = os.path.getsize(LOG_FILE)
+    except OSError:
+        return {"lines": [], "total": 0, "offset": offset}
+    start = max(0, min(span[0], size))
+    end = max(start, min(span[1], size))
+    lines = []
+    total = 0
+    pending = b""
+    remaining = end - start
+    with open(LOG_FILE, "rb") as f:
+        f.seek(start)
+        while remaining > 0:
+            buf = f.read(min(1024 * 1024, remaining))
+            if not buf:
+                break
+            remaining -= len(buf)
+            parts = (pending + buf).split(b"\n")
+            pending = parts.pop()
+            for b in parts:
+                if offset <= total < offset + limit:
+                    lines.append(b.decode("utf-8", "replace"))
+                total += 1
+    if pending:
+        if offset <= total < offset + limit:
+            lines.append(pending.decode("utf-8", "replace"))
+        total += 1
+    return {"lines": lines, "total": total, "offset": offset}
 
 
 @app.get("/api/album/{s}/{a}/logs")
-def album_logs(s: int, a: int, offset: int = 0,
+def album_logs(s: int, a: int, offset: int = Query(default=0, ge=0),
                limit: int = Query(default=2000, ge=1, le=20000)):
     _, spans = get_tree()
     return _span_lines(spans, ("s", s, a), offset, limit)
 
 
 @app.get("/api/photo/{s}/{a}/{p}/logs")
-def photo_logs(s: int, a: int, p: int, offset: int = 0,
+def photo_logs(s: int, a: int, p: int, offset: int = Query(default=0, ge=0),
                limit: int = Query(default=2000, ge=1, le=20000)):
     _, spans = get_tree()
     return _span_lines(spans, ("s", s, a, p), offset, limit)
@@ -619,27 +655,38 @@ def albums_overview():
             e["errors"] += a["errors"]
             e["rejections"] += a["rejections"]
     out = list(agg.values())
+    done_set = set(t["done_urls"])
     for e in out:
         e["retried"] = len(set(e["sessions"])) > 1
+        # recompute from the aggregated counters, not from the first session
+        e["status"], e["end_reason"] = _album_status(e, done_set)
     out.sort(key=lambda e: (e["sessions"][0] if e["sessions"] else 0))
     return {"albums": out, "done_urls": t["done_urls"]}
 
 
 # ---------------------------------------------------------------- disk index
 
-_files_cache = {"value": None}
+_files_cache = {"value": None, "ts": 0.0}
 
 
 def scan_downloads(refresh=False):
     """Index image files under DOWNLOADS_DIR (skipping the logs dir).
 
     Filenames look like 20250429_081104_29388560487456506.jpg and album dirs
-    contain '(a.29388587357453819)' -> fbid / name_date / album_set."""
-    if not refresh and _files_cache["value"] is not None:
+    contain '(a.29388587357453819)' -> fbid / name_date / album_set.
+    Cached for FILES_CACHE_TTL seconds (0 = rescan every call) so newly
+    downloaded files show up as "on disk" without a manual refresh."""
+    now = time.time()
+    if not refresh and _files_cache["value"] is not None \
+            and now - _files_cache["ts"] < FILES_CACHE_TTL:
         return _files_cache["value"]
     files = []
+    truncated = False
     root = DOWNLOADS_DIR
     for dirpath, dirnames, filenames in os.walk(root):
+        if len(files) >= FILES_MAX:
+            truncated = True
+            break
         dirnames[:] = [d for d in dirnames if d != "logs"]
         rel_dir = os.path.relpath(dirpath, root)
         m = DIR_SET_RE.search(rel_dir)
@@ -665,10 +712,12 @@ def scan_downloads(refresh=False):
             files.append({"path": os.path.join(rel_dir, fn), "name": fn, "size": st.st_size,
                           "mtime": st.st_mtime, "fbid": fbid, "name_date": name_date,
                           "album_set": album_set})
-            if len(files) >= 50000:
+            if len(files) >= FILES_MAX:
+                truncated = True
                 break
-    value = {"root": root, "count": len(files), "files": files}
+    value = {"root": root, "count": len(files), "truncated": truncated, "files": files}
     _files_cache["value"] = value
+    _files_cache["ts"] = now
     return value
 
 
@@ -763,9 +812,10 @@ def raw():
 def status():
     try:
         st = os.stat(LOG_FILE)
-        return {"exists": True, "size": st.st_size, "mtime": st.st_mtime}
+        return {"exists": True, "size": st.st_size, "mtime": st.st_mtime,
+                "timezone": DISPLAY_TZ}
     except OSError:
-        return {"exists": False, "size": 0, "mtime": None}
+        return {"exists": False, "size": 0, "mtime": None, "timezone": DISPLAY_TZ}
 
 
 _stats_cache = {"key": None, "value": None}

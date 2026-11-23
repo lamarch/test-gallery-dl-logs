@@ -140,6 +140,9 @@ legacy non-interpolated lines (`[%(asctime)s][%(levelname)s] …`) are shown as 
 | `SCAN_MAX_BYTES` | `0` (whole file) | if > 0, `/api/stats`, `/api/search`, album-start detection and the tree parser only scan the last N bytes (`truncated: true` reported). The example compose sets 128 MiB since the log grows unbounded in `mode: "a"` |
 | `PHOTOS_PAGE_SIZE` | `500` | photos per page in the Tree tab ("load more" pagination) |
 | `TREE_MAX_PHOTOS` | `50000` | RAM cap on photo nodes materialized in the parsed tree (`<= 0` = unlimited). Beyond the cap, photos are still counted and `/api/album/{s}/{a}` re-parses the album's log span on demand (per-photo log spans keep working) |
+| `DISPLAY_TZ` | `TZ` env, else `UTC` | IANA timezone used to **display** the log timestamps (logs are UTC). The UI parses them as UTC and renders in this zone via `Intl`; exposed by `/api/status` as `timezone` |
+| `FILES_CACHE_TTL` | `30` | seconds the disk index (`/api/files`) is cached before an automatic rescan, so new downloads show as "on disk" without a manual refresh (`0` = rescan every call, `?refresh=1` forces) |
+| `FILES_MAX` | `50000` | max files indexed by the disk scan (walk stops early, `truncated: true` reported) |
 
 ## API
 
@@ -162,7 +165,7 @@ legacy non-interpolated lines (`[%(asctime)s][%(levelname)s] …`) are shown as 
 | `GET /api/file?path=REL` | serve one image (traversal-safe) |
 | `GET /api/exif?path=REL` | EXIF DateTimeOriginal vs mtime → `synced` / `mismatch` / `no_exif` + filename date |
 | `GET /api/export` | JSON attachment: tree + albums overview + files |
-| `GET /api/status` | existence / size / mtime of the log file |
+| `GET /api/status` | existence / size / mtime of the log file + `timezone` (DISPLAY_TZ) |
 | `GET /api/raw` | raw log file (download) |
 
 ## Notes
@@ -178,6 +181,9 @@ legacy non-interpolated lines (`[%(asctime)s][%(levelname)s] …`) are shown as 
 - If you change `output.logfile.path` in `config/gallery-dl.conf`, update `LOG_FILE`.
 - `fb-dl` runs as `1000:1000`; the webui container uses the same uid, so it can read
   the log and the downloads without issues.
+- Log timestamps are written in UTC. Set `DISPLAY_TZ` (e.g. `Europe/Paris`) in the
+  webui service environment to display every timestamp (log lines, tree, chips, files
+  mtime) in that timezone; raw API/JSON-export values stay UTC.
 
 ## Development / tests
 

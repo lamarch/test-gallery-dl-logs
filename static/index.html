@@ -180,7 +180,25 @@ function humanSize(n) {
   return (n / 1048576).toFixed(1) + " MiB";
 }
 function trunc(s, n) { s = String(s); return s.length > n ? s.slice(0, n - 1) + "…" : s; }
-function esc(s) { const d = document.createElement("div"); d.textContent = s; return d.innerHTML; }
+function esc(s) { const d = document.createElement("div"); d.textContent = s; return d.innerHTML.replace(/"/g, "&quot;").replace(/'/g, "&#39;"); }
+// log timestamps are UTC ("YYYY-MM-DD HH:MM:SS"); display them in DISPLAY_TZ
+let TZ = "UTC";
+let tzFmt = null;
+function tzFormatter() {
+  if (!tzFmt) {
+    const opts = { timeZone: TZ, year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false };
+    try { tzFmt = new Intl.DateTimeFormat(undefined, opts); }
+    catch (e) { TZ = "UTC"; tzFmt = new Intl.DateTimeFormat(undefined, Object.assign({}, opts, { timeZone: "UTC" })); }
+  }
+  return tzFmt;
+}
+function setTZ(tz) { if (tz && tz !== TZ) { TZ = tz; tzFmt = null; } }
+function fmtEpoch(sec) { return tzFormatter().format(new Date(sec * 1000)); }
+function fmtTs(s) {
+  if (!s) return "";
+  const d = new Date(String(s).slice(0, 19).replace(" ", "T") + "Z");
+  return isNaN(d.getTime()) ? String(s) : tzFormatter().format(d);
+}
 function parseEvent(line) {
   const m = TS_RE.exec(line);
   const ts = m ? m[1] : "";
@@ -211,7 +229,7 @@ function makeDiv(line) {
   if (viewMode === "parsed") {
     const ev = parseEvent(line);
     cls += " event " + ev.lvl;
-    const ts = document.createElement("span"); ts.className = "ts"; ts.textContent = ev.ts ? ev.ts + " " : "";
+    const ts = document.createElement("span"); ts.className = "ts"; ts.textContent = ev.ts ? fmtTs(ev.ts) + " " : "";
     const ic = document.createElement("span"); ic.className = "icon"; ic.textContent = ev.icon;
     const tx = document.createElement("span"); tx.textContent = ev.text;
     div.append(ts, ic, tx);
@@ -260,6 +278,7 @@ function connect() {
 function setPath(p) { $("st-path").textContent = p; $("st-path").title = p; }
 function updateEarlierBtn() { earlierBtn.disabled = !hasMore; }
 async function loadHistory() {
+  fetch("/api/status").then(r => r.json()).then(st => setTZ(st.timezone)).catch(() => {});
   try {
     const r = await fetch("/api/logs?tail=" + INITIAL_TAIL);
     const data = await r.json();
@@ -342,8 +361,8 @@ function renderTree(t) {
     const det = document.createElement("details");
     det.open = true;
     const sum = document.createElement("summary");
-    sum.innerHTML = "🔄 <b>session #" + s.idx + "</b> — started " + esc(s.start) +
-      " → " + esc(s.end) + " &nbsp;" + statsLine(s);
+    sum.innerHTML = "🔄 <b>session #" + s.idx + "</b> — started " + fmtTs(s.start) +
+      " → " + fmtTs(s.end) + " &nbsp;" + statsLine(s);
     det.appendChild(sum);
     const box = document.createElement("div");
     box.className = "tree-indent";
@@ -354,7 +373,7 @@ function renderTree(t) {
         (a.link ? '<a href="' + esc(a.link) + '" target="_blank" rel="noopener">' + esc(trunc(a.url, 60)) + "</a>" : esc(trunc(a.url, 60))) +
         " &nbsp;" + badge(a.status, a.status) +
         (a.set_id ? ' <span class="stat">set=a.' + esc(a.set_id) + "</span>" : "") +
-        ' <span class="stat">' + esc(a.start) + " → " + esc(a.end) + " — " + esc(a.end_reason || "") + "</span>" +
+        ' <span class="stat">' + fmtTs(a.start) + " → " + fmtTs(a.end) + " — " + esc(a.end_reason || "") + "</span>" +
         "<br>" + statsLine(a);
       ad.appendChild(asum);
       const abox = document.createElement("div");
@@ -397,7 +416,7 @@ async function loadAlbumPhotos(s, a, el, offset) {
     const row = document.createElement("div");
     row.className = "photo-row";
     const icon = p.status === "downloaded" ? "🖼" : p.status === "failed" ? "❌" : "⏳";
-    let html = icon + " " + esc(p.ts || "") + " ";
+    let html = icon + " " + fmtTs(p.ts) + " ";
     if (p.link_photo) html += '<a href="' + esc(p.link_photo) + '" target="_blank" rel="noopener">fbid=' + esc(p.fbid || "?") + "</a> ";
     else html += "fbid=" + esc(p.fbid || "?") + " ";
     html += '<span class="stat">' + esc(p.file || p.status) +
@@ -419,7 +438,7 @@ async function loadAlbumPhotos(s, a, el, offset) {
       if (p.path) {
         const ex = await (await fetch("/api/exif?path=" + encodeURIComponent(p.path))).json();
         dbox.insertAdjacentHTML("beforeend",
-          '<div class="stat">exif: ' + esc(ex.exif || "none") + " · mtime: " + esc(new Date(ex.mtime * 1000).toLocaleString()) +
+          '<div class="stat">exif: ' + esc(ex.exif || "none") + " · mtime: " + esc(fmtEpoch(ex.mtime)) +
           " · name-date: " + esc(ex.name_date || "?") + " · state: " + badge(ex.state, ex.state === "synced" ? "done" : "error") + "</div>");
       }
       const lg = await (await fetch("/api/photo/" + s + "/" + a + "/" + p.idx + "/logs?limit=500")).json();
@@ -520,7 +539,7 @@ function renderFiles() {
       "<td>" + esc(f.name) + (f.fbid ? '<br><span class="stat">fbid=' + esc(f.fbid) + "</span>" : "") + "</td>" +
       '<td class="stat">' + humanSize(f.size) + "</td>" +
       '<td class="stat">' + esc(f.name_date || "?") + "</td>" +
-      '<td class="stat">' + esc(new Date(f.mtime * 1000).toLocaleString()) + "</td>" +
+      '<td class="stat">' + esc(fmtEpoch(f.mtime)) + "</td>" +
       '<td class="stat">' + esc(f.album_set || "?") + "</td>" +
       '<td><button class="exif-btn">exif</button><span class="exif-res"></span></td>';
     const btn = row.querySelector(".exif-btn");
@@ -543,7 +562,8 @@ function renderFiles() {
     table.appendChild(row);
   }
   el.appendChild(table);
-  $("files-count").textContent = filesData.count + " file(s) on disk, " + matched + " shown";
+  $("files-count").textContent = filesData.count + " file(s) on disk" +
+    (filesData.truncated ? " (index capped at FILES_MAX)" : "") + ", " + matched + " shown";
   if (!shown) el.innerHTML = "<p class='stat'>no files</p>";
 }
 $("files-album").addEventListener("change", renderFiles);
@@ -607,6 +627,7 @@ async function poll() {
       if (onlyRej) { onlyRej = false; rejBanner.classList.remove("active"); refilter(); }
     }
     const st = await (await fetch("/api/status")).json();
+    setTZ(st.timezone);
     $("st-size").textContent = st.exists ? humanSize(st.size) : "no log file yet";
     const a = await (await fetch("/api/albums")).json();
     const t = await (await fetch("/api/tree")).json();
@@ -614,13 +635,13 @@ async function poll() {
     const chips = [];
     let stateChip;
     if (s.last_sleep) {
-      const until = Date.parse(s.last_sleep.at.replace(" ", "T")) + s.last_sleep.seconds * 1000;
+      const until = Date.parse(s.last_sleep.at.replace(" ", "T") + "Z") + s.last_sleep.seconds * 1000;
       stateChip = "💤 <b>sleeping " + s.last_sleep.seconds + "s</b> (" + esc(s.last_sleep.reason) + ")" +
-        (Date.now() < until ? " — wakes <b>" + new Date(until).toLocaleTimeString() + "</b>" : " — (elapsed)");
+        (Date.now() < until ? " — wakes <b>" + fmtEpoch(until / 1000) + "</b>" : " — (elapsed)");
     } else {
       stateChip = "▶ <b>working</b>";
     }
-    if (t.runs) stateChip += ' &nbsp; 🔄 run <b>#' + (t.runs - 1) + "</b> started " + esc(t.sessions[t.runs - 1].start);
+    if (t.runs) stateChip += ' &nbsp; 🔄 run <b>#' + (t.runs - 1) + "</b> started " + fmtTs(t.sessions[t.runs - 1].start);
     chips.push('<span class="chip">' + stateChip + "</span>");
     if (s.current_album) chips.push('<span class="chip clickable" id="chip-album">📁 <b>' + esc(trunc(s.current_album, 50)) + "</b> · 🖼 " + s.current_album_files + " files</span>");
     if (a.available) chips.push('<span class="chip ok">✓ albums <b>' + a.counts.done + "/" + a.counts.total + "</b>" +
@@ -628,7 +649,7 @@ async function poll() {
     chips.push('<span class="chip">🖼 <b>' + s.files + "</b> files</span>");
     chips.push('<span class="chip ' + (s.errors ? "err" : "") + '">✖ <b>' + s.errors + "</b></span>");
     chips.push('<span class="chip ' + (nrej ? "err" : "") + '">🚫 <b>' + nrej + "</b></span>");
-    if (st.exists) chips.push('<span class="chip">last activity <b>' + new Date(st.mtime * 1000).toLocaleString() + "</b></span>");
+    if (st.exists) chips.push('<span class="chip">last activity <b>' + fmtEpoch(st.mtime) + "</b> (" + esc(TZ) + ")</span>");
     statusbar.innerHTML = chips.join("");
     const chipAlbum = $("chip-album");
     if (chipAlbum) chipAlbum.addEventListener("click", () => { showTab("albums"); });

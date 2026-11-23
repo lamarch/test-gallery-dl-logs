@@ -64,6 +64,7 @@ Image.new("RGB", (16, 16), (1, 2, 3)).save(os.path.join(ALBUM_DIR, NOEXIF_JPG), 
 os.environ["LOG_FILE"] = LOG_FILE
 os.environ["ALBUMS_FILE"] = ALBUMS_FILE
 os.environ["DOWNLOADS_DIR"] = DOWNLOADS_DIR
+os.environ["DISPLAY_TZ"] = "Europe/Paris"
 
 from fastapi.testclient import TestClient  # noqa: E402
 
@@ -203,6 +204,15 @@ class ApiTests(unittest.TestCase):
         data = self.client.get("/api/status").json()
         self.assertTrue(data["exists"])
         self.assertEqual(data["size"], os.path.getsize(LOG_FILE))
+        self.assertEqual(data["timezone"], "Europe/Paris")  # DISPLAY_TZ env
+
+    def test_negative_offsets_rejected(self):
+        for path in ("/api/logs?offset=-1",
+                     "/api/album/0/0?offset=-1",
+                     "/api/album/0/0/logs?offset=-5",
+                     "/api/photo/0/0/0/logs?offset=-5"):
+            r = self.client.get(path)
+            self.assertEqual(r.status_code, 422, path)
 
     def test_raw_download(self):
         r = self.client.get("/api/raw")
@@ -326,11 +336,19 @@ class TreeApiTests(unittest.TestCase):
         d = self.client.get("/api/album/1/0").json()
         self.assertEqual(len(d["photos"]), 2)
 
+    def test_span_offset_beyond_total(self):
+        r = self.client.get("/api/photo/0/0/0/logs", params={"offset": 100}).json()
+        self.assertEqual(r["lines"], [])
+        self.assertEqual(r["total"], 4)
+        self.assertEqual(r["offset"], 100)
+
     def test_albums_overview_retried(self):
         o = self.client.get("/api/albums_overview").json()
         self.assertEqual(len(o["albums"]), 1)
         a = o["albums"][0]
         self.assertEqual(a["set_id"], SET_ID)
+        # status recomputed from aggregated counters: the album saw a rejection
+        self.assertEqual(a["status"], "banned")
         self.assertEqual(a["sessions"], [0, 1])
         self.assertTrue(a["retried"])
         self.assertEqual(a["photos"], 3)
@@ -361,6 +379,34 @@ class FilesApiTests(unittest.TestCase):
     def test_files_refresh(self):
         d = self.client.get("/api/files", params={"refresh": 1}).json()
         self.assertEqual(d["count"], 2)
+        self.assertFalse(d["truncated"])
+
+    def test_files_cache_ttl_and_cap(self):
+        from PIL import Image as _Img
+        extra = os.path.join(ALBUM_DIR, "20250506_082804_777666555444333.jpg")
+        try:
+            self.client.get("/api/files", params={"refresh": 1})  # populate cache (2 files)
+            _Img.new("RGB", (8, 8)).save(extra, "JPEG")
+            d = self.client.get("/api/files").json()             # cached: still 2
+            self.assertEqual(d["count"], 2)
+            old_ttl = app_module.FILES_CACHE_TTL
+            app_module.FILES_CACHE_TTL = 0                        # TTL=0 -> rescan
+            try:
+                d = self.client.get("/api/files").json()
+                self.assertEqual(d["count"], 3)                   # new file visible
+                old_max = app_module.FILES_MAX
+                app_module.FILES_MAX = 1
+                try:
+                    d = self.client.get("/api/files").json()
+                    self.assertEqual(d["count"], 1)
+                    self.assertTrue(d["truncated"])
+                finally:
+                    app_module.FILES_MAX = old_max
+            finally:
+                app_module.FILES_CACHE_TTL = old_ttl
+        finally:
+            os.remove(extra)
+            self.client.get("/api/files", params={"refresh": 1})  # restore cache (count 2)
 
     def test_file_serving_and_traversal(self):
         r = self.client.get("/api/file", params={"path": SYNCED_REL})

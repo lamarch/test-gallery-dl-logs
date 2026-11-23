@@ -21,6 +21,16 @@ jobs:
         run: python -m py_compile app.py tailer.py test_tailer.py test_api.py
       - name: Unit + API tests
         run: python -m unittest test_tailer test_api -v
+      - name: UI JS syntax check
+        run: |
+          python - <<'PY'
+          import re
+          html = open("static/index.html", encoding="utf-8").read()
+          m = re.search(r"<script>\n(.*)\n</script>", html, re.S)
+          assert m, "script block not found"
+          open("/tmp/ui.js", "w", encoding="utf-8").write(m.group(1))
+          PY
+          node --check /tmp/ui.js
 
   docker:
     runs-on: ubuntu-latest
