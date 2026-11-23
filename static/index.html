@@ -66,7 +66,7 @@ summary:hover{background:rgba(22,27,34,.6)}
 .badge.done{color:var(--ok);border-color:var(--ok)}
 .badge.banned,.badge.error{color:var(--error);border-color:var(--error)}
 .badge.incomplete{color:var(--warning);border-color:var(--warning)}
-.badge.retried{color:var(--info);border-color:var(--info)}
+.badge.retried{color:var(--info);border-color:var(--info)}.badge.downloaded{color:var(--ok);border-color:var(--ok)}.badge.on_disk_only{color:var(--info);border-color:var(--info)}.badge.missing_on_disk{color:var(--warning);border-color:var(--warning)}.badge.failed{color:var(--error);border-color:var(--error)}.badge.pending{color:var(--muted)}
 .stat{color:var(--muted);font-size:12px}
 .stat b{color:var(--fg)}
 .tree-indent{margin-left:18px;border-left:1px solid var(--border);padding-left:8px}
@@ -351,13 +351,18 @@ async function loadTree() {
 function badge(txt, cls) { return '<span class="badge ' + cls + '">' + esc(txt) + "</span>"; }
 function statsLine(o) {
   const pn = o.photos_n != null ? o.photos_n : (o.photos || 0);  // overview entries use "photos"
-  return '<span class="stat">💼 <b>' + pn + '</b> photos · 📥 <b>' + o.files +
-    '</b> files · 💾 <b>' + humanSize(o.bytes) + '</b> · 💤 <b>' + o.sleeps.toFixed(1) +
+  return '<span class="stat">🖼 <b>' + pn + '</b> photos (log) · 📥 <b>' + o.files +
+    '</b> downloaded (log) · 💾 <b>' + humanSize(o.bytes) + '</b> · 💤 <b>' + o.sleeps.toFixed(1) +
     's</b> sleep' +
-    (o.on_disk != null ? ' · 💽 <b>' + o.on_disk + '</b> on disk' : '') +
+    (o.on_disk != null ? ' · 💽 <b>' + o.on_disk + '</b> on disk (disk)' : '') +
     (o.missing_on_disk ? ' · ⚠ <b>' + o.missing_on_disk + '</b> missing' : '') +
     (o.errors ? ' · ✖ <b>' + o.errors + '</b>' : '') +
     (o.rejections ? ' · 🚫 <b>' + o.rejections + '</b>' : '') + "</span>";
+}
+function stateLine(st) {
+  if (!st) return "";
+  const order = [["downloaded", "💾"], ["on_disk_only", "📁"], ["missing_on_disk", "⚠️"], ["failed", "❌"], ["pending", "⏳"]];
+  return order.filter(([k]) => st[k]).map(([k, ic]) => ic + " " + badge(k, k) + " <b>" + st[k] + "</b>").join(" ");
 }
 function renderTree(t) {
   const el = $("view-tree");
@@ -383,7 +388,7 @@ function renderTree(t) {
         " &nbsp;" + badge(a.status, a.status) +
         (a.set_id ? ' <span class="stat">set=a.' + esc(a.set_id) + "</span>" : "") +
         ' <span class="stat">' + fmtTs(a.start) + " → " + fmtTs(a.end) + " — " + esc(a.end_reason || "") + "</span>" +
-        "<br>" + statsLine(a);
+        "<br>" + statsLine(a) + (a.states ? ' <span class="stat">' + stateLine(a.states) + "</span>" : "");
       ad.appendChild(asum);
       const abox = document.createElement("div");
       abox.className = "tree-indent";
@@ -424,14 +429,15 @@ async function loadAlbumPhotos(s, a, el, offset) {
   for (const p of r.photos) {
     const row = document.createElement("div");
     row.className = "photo-row";
-    const icon = p.status === "downloaded" ? "🖼" : p.status === "failed" ? "❌" : "⏳";
-    let html = icon + " " + fmtTs(p.ts) + " ";
+    const st = p.state || p.status;
+    const icon = { downloaded: "💾", on_disk_only: "📁", missing_on_disk: "⚠️", failed: "❌", pending: "⏳" }[st] || "⏳";
+    let html = icon + " " + badge(st, st) + " " + fmtTs(p.ts) + " ";
     if (p.link_photo) html += '<a href="' + esc(p.link_photo) + '" target="_blank" rel="noopener">fbid=' + esc(p.fbid || "?") + "</a> ";
     else html += "fbid=" + esc(p.fbid || "?") + " ";
     html += '<span class="stat">' + esc(p.file || p.status) +
       (p.bytes ? " · " + humanSize(p.bytes) : "") +
       (p.sleep ? " · 💤" + p.sleep.toFixed(1) + "s" : "") +
-      (p.on_disk ? ' · 💾 on disk' : ' · <span style="color:var(--warning)">not on disk</span>') + "</span>";
+      (p.path ? ' · <a href="/api/file?path=' + encodeURIComponent(p.path) + '" target="_blank" rel="noopener">open</a>' : "") + "</span>";
     row.innerHTML = html;
     const det = document.createElement("details");
     const sum = document.createElement("summary");
@@ -487,7 +493,7 @@ function renderOverview(o) {
       " " + badge(a.status, a.status) + (a.retried ? " " + badge("retried", "retried") : "") +
       (a.set_id ? ' <span class="stat">set=a.' + esc(a.set_id) + (a.vanity ? " · vanity=" + esc(a.vanity) : "") + "</span>" : "") +
       "</h3><div class='stat'>sessions: " + a.sessions.map(x => "#" + x).join(", ") +
-      " · " + statsLine(a) + " · 💾 on disk: <b>" + a.on_disk + "</b> files" +
+      " · " + statsLine(a) + (a.states ? ' · ' + stateLine(a.states) : "") + " · 💾 on disk: <b>" + a.on_disk + "</b> files" +
       (a.missing_on_disk ? " · ⚠ <b>" + a.missing_on_disk + "</b> missing on disk" : "") +
       (a.extra_on_disk ? " · ➕ <b>" + a.extra_on_disk + "</b> extra on disk" : "") +
       (a.end_reason ? " · end: " + esc(a.end_reason) : "") + "</div>";

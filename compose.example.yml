@@ -25,14 +25,10 @@ services:
       TREE_MAX_PHOTOS: "50000"              # RAM cap on materialized photo nodes in the parsed tree; beyond it, albums are re-parsed from their log span on demand
       DISPLAY_TZ: "Europe/Paris"            # log timestamps are UTC; the UI displays them in this IANA timezone (falls back to TZ, then UTC). EXIF DateTimeOriginal is also interpreted in this zone
       EXIF_TOLERANCE_S: "2"                 # |mtime - exif| tolerance for the exif "synced" state
-      ALBUMS_NAMES_FILE: /config/albums-names.txt   # optional album display names, one "<a.set_id or url> <name>" per line
       FILES_CACHE_TTL: "30"                 # seconds the disk index (/api/files) is cached before an automatic rescan (0 = rescan every call)
     volumes:
       - ./downloads-2:/downloads:ro         # same mount as fb-dl, read-only
       - ./config/albums.txt:/config/albums.txt:ro
-      # optional, only if you use album display names (ALBUMS_NAMES_FILE):
-      # touch config/albums-names.txt first, then add:
-      # - ./config/albums-names.txt:/config/albums-names.txt:ro
     networks:
       - caddy
 

@@ -4,6 +4,7 @@ import json
 import os
 import re
 import time
+from collections import Counter
 from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
@@ -34,8 +35,6 @@ TREE_MAX_PHOTOS = int(os.environ.get("TREE_MAX_PHOTOS", "50000"))
 # (unless the file carries OffsetTimeOriginal), matching what an external
 # script that syncs mtime <- EXIF in local time would produce.
 DISPLAY_TZ = os.environ.get("DISPLAY_TZ") or os.environ.get("TZ") or "UTC"
-# Optional album display names: one "<a.set_id or url> <name>" per line.
-ALBUMS_NAMES_FILE = os.environ.get("ALBUMS_NAMES_FILE", "/config/albums-names.txt")
 # |mtime - exif| tolerance (seconds) for the exif "synced" state.
 EXIF_TOLERANCE_S = float(os.environ.get("EXIF_TOLERANCE_S", "2"))
 # Disk index (/api/files) cache TTL in seconds; 0 = rescan on every call.
@@ -247,31 +246,6 @@ def _read_albums_file(path):
     return albums
 
 
-_names_cache = {"key": None, "value": None}
-
-
-def _album_names():
-    """Optional display names from ALBUMS_NAMES_FILE: '<a.set_id or url> <name>'."""
-    try:
-        st = os.stat(ALBUMS_NAMES_FILE)
-        key = (st.st_size, st.st_mtime_ns)
-    except OSError:
-        return {}
-    if _names_cache["key"] == key:
-        return _names_cache["value"]
-    names = {}
-    with open(ALBUMS_NAMES_FILE, encoding="utf-8", errors="replace") as f:
-        for raw in f:
-            line = raw.strip()
-            if not line or line.startswith("#"):
-                continue
-            parts = line.split(None, 1)
-            if len(parts) == 2:
-                names[parts[0]] = parts[1].strip()
-    _names_cache.update(key=key, value=names)
-    return names
-
-
 def _dir_names():
     """Fallback album names from download dir names: '.../<title> (a.<id>)'."""
     out = {}
@@ -286,15 +260,11 @@ def _dir_names():
     return out
 
 
-def _album_display_name(url, set_id, names, dirnames):
-    # primary source: the download dir title gallery-dl itself created
-    # (".../<title> (a.<id>)") — i.e. the name as downloaded
+def _album_display_name(url, set_id, dirnames):
+    # the download dir title gallery-dl itself created (".../<title> (a.<id>)")
+    # — i.e. the album name as downloaded
     if set_id and dirnames.get("a." + set_id):
         return dirnames["a." + set_id]
-    if set_id and names.get("a." + set_id):
-        return names["a." + set_id]
-    if names.get(url):
-        return names[url]
     return None
 
 
@@ -328,7 +298,6 @@ def albums():
         return {"available": False, "path": ALBUMS_FILE, "albums": [],
                 "counts": empty, "current": None}
     started = _started_urls()
-    names = _album_names()
     dirnames = _dir_names()
     out = []
     counts = {"done": 0, "incomplete": 0, "not_started": 0}
@@ -345,7 +314,7 @@ def albums():
         set_id, _ = _parse_url_ids(url)
         counts[status] += 1
         out.append({"url": url, "status": status,
-                    "name": _album_display_name(url, set_id, names, dirnames)})
+                    "name": _album_display_name(url, set_id, dirnames)})
     counts["total"] = len(out)
     return {"available": True, "path": ALBUMS_FILE, "albums": out,
             "counts": counts, "current": current}
@@ -397,7 +366,6 @@ def parse_log():
     to (start_byte, end_byte) ranges in the log file."""
     parsed_albums = _read_albums_file(ALBUMS_FILE) or []
     done_urls = {u for u, d in parsed_albums if d}
-    names = _album_names()
     dirnames = _dir_names()
 
     sessions = []
@@ -459,7 +427,7 @@ def parse_log():
                 url = m.group(1)
                 set_id, vanity = _parse_url_ids(url)
                 cur_a = {"idx": ai, "url": url, "set_id": set_id, "vanity": vanity,
-                         "name": _album_display_name(url, set_id, names, dirnames),
+                         "name": _album_display_name(url, set_id, dirnames),
                          "link": _album_link(url, set_id), "start": ts, "end": ts,
                          "start_off": start, "end_off": end, "photos": [], "photos_n": 0,
                          "photos_seen": 0, "photos_truncated": False,
@@ -568,6 +536,23 @@ def get_tree():
     return value
 
 
+def _photo_state(p, disk_fbids):
+    """Per-photo state combining log signal and disk presence (fbid):
+    downloaded      = downloaded per logs AND on disk (téléchargée + sauvegardée)
+    on_disk_only    = on disk but no download line in the log (déjà existante /
+                      skipped because present from a previous run)
+    missing_on_disk = log says downloaded but the file is not on disk
+    failed          = download error (anti-bot rejection, HTTP error, ...)
+    pending         = photo page seen, nothing downloaded, not on disk"""
+    if p.get("fbid") and p["fbid"] in disk_fbids:
+        return "downloaded" if p.get("status") == "downloaded" else "on_disk_only"
+    if p.get("status") == "downloaded":
+        return "missing_on_disk"
+    if p.get("status") == "failed":
+        return "failed"
+    return "pending"
+
+
 def _annotate_disk(t):
     """Cross log-downloaded photos with files actually on disk, per album."""
     disk_fbids_by_set = {}
@@ -584,6 +569,7 @@ def _annotate_disk(t):
             a["missing_on_disk"] = sum(
                 1 for p in a["photos"]
                 if p.get("status") == "downloaded" and p.get("fbid") and p["fbid"] not in disk)
+            a["states"] = dict(Counter(_photo_state(p, disk) for p in a["photos"]))
 
 
 @app.get("/api/tree")
@@ -668,12 +654,10 @@ def album_detail(s: int, a: int, offset: int = Query(default=0, ge=0),
             q["size"] = f["size"]
             q["mtime"] = f["mtime"]
             q["name_date"] = f.get("name_date")
-            # seen in log but no download line (e.g. skipped because the file
-            # was already on disk from a previous run) -> it IS downloaded
-            if q["status"] == "pending":
-                q["status"] = "downloaded"
         else:
             q["on_disk"] = False
+        # explicit state from log signal + disk presence (no status rewriting)
+        q["state"] = _photo_state(p, disk_fbids)
         q["link_photo"] = _photo_link(p.get("fbid"), alb.get("set_id"))
         photos.append(q)
     out = {k: v for k, v in alb.items() if k != "photos"}
@@ -683,6 +667,7 @@ def album_detail(s: int, a: int, offset: int = Query(default=0, ge=0),
     out["missing_on_disk"] = sorted(
         p["fbid"] for p in photos_src
         if p.get("status") == "downloaded" and p.get("fbid") and p["fbid"] not in disk_fbids)
+    out["states"] = dict(Counter(_photo_state(p, disk_fbids) for p in photos_src))
     return out
 
 
@@ -740,6 +725,7 @@ def photo_logs(s: int, a: int, p: int, offset: int = Query(default=0, ge=0),
 def albums_overview():
     """Album-centric view across all sessions (set_id keyed), with retry flag."""
     t, _ = get_tree()
+    _annotate_disk(t)
     by_set = {}
     for f in scan_downloads()["files"]:
         if f.get("album_set"):
@@ -754,10 +740,13 @@ def albums_overview():
                 "link": a["link"], "sessions": [], "session_details": [], "status": a["status"],
                 "end_reason": a.get("end_reason"), "photos": 0, "files": 0, "bytes": 0,
                 "sleeps": 0.0, "errors": 0, "rejections": 0, "_log_fbids": set(),
+                "states": {},
                 "on_disk": len(by_set.get("a." + a["set_id"], [])) if a["set_id"] else 0})
             e["sessions"].append(s["idx"])
             e["_log_fbids"].update(p["fbid"] for p in a["photos"]
                                   if p.get("status") == "downloaded" and p.get("fbid"))
+            for k, v in a.get("states", {}).items():
+                e["states"][k] = e["states"].get(k, 0) + v
             e["session_details"].append({
                 "session": s["idx"], "album_idx": a["idx"],
                 "session_start": s["start"], "start": a["start"], "end": a["end"],

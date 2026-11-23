@@ -129,13 +129,15 @@ Log line format handled (verified against gallery-dl 1.32.21 output):
 `[2026-11-22 18:40:12] [facebook][debug] …` and the default `[facebook][debug] …`;
 legacy non-interpolated lines (`[%(asctime)s][%(levelname)s] …`) are shown as "other".
 
-**Photos vs files**: `photos_n` counts `"GET /photo/?fbid=…` lines = photo pages visited
-in the album. `files` counts **media payloads actually downloaded** — HTTP responses
-`< 400` with a byte count from the CDN (`fbcdn.net`), i.e. files really written to disk.
-Do NOT count `Adjusting filename extension of '…' to '…'` lines for this: they only
-appear when gallery-dl changes the extension (avif→jpg) and silently undercount when
-the CDN already serves `.jpg`. The two numbers still differ when a photo page was seen
-but not downloaded (failed download, anti-bot rejection, "already downloaded" skip).
+**Photos vs files vs on-disk** (labels in the UI say which source each number comes from):
+- `photos` = `"GET /photo/?fbid=…` lines in the log = photo pages visited (log);
+- `downloaded`/`files` = media payloads actually downloaded in this run — HTTP `< 400`
+  with a byte count from the CDN `fbcdn.net` (log). Do NOT count `Adjusting filename
+  extension` lines for this: they only appear on avif→jpg and undercount when the CDN
+  serves `.jpg` directly;
+- `on disk` = files physically present under `DOWNLOADS_DIR`, matched by fbid (disk).
+They differ when a page was seen but not downloaded (failed, anti-bot, already-on-disk
+skip) or when the file was already there from a previous run.
 
 ## Environment variables (service `webui` in your compose)
 
@@ -152,7 +154,6 @@ but not downloaded (failed download, anti-bot rejection, "already downloaded" sk
 | `PHOTOS_PAGE_SIZE` | `500` | photos per page in the Tree tab ("load more" pagination) |
 | `TREE_MAX_PHOTOS` | `50000` | RAM cap on photo nodes materialized in the parsed tree (`<= 0` = unlimited). Beyond the cap, photos are still counted and `/api/album/{s}/{a}` re-parses the album's log span on demand (per-photo log spans keep working) |
 | `DISPLAY_TZ` | `TZ` env, else `UTC` | IANA timezone used to **display** the log timestamps (logs are UTC) **and to interpret EXIF `DateTimeOriginal`** (EXIF has no timezone; `OffsetTimeOriginal` wins if present). UI renders via `Intl`; exposed by `/api/status` as `timezone` |
-| `ALBUMS_NAMES_FILE` | `/config/albums-names.txt` | optional album-name override/fallback, one `<a.set_id or url> <name>` per line. The primary source is the download dir title `…/<title> (a.<id>)` (the name as downloaded). Mount only that single file if you use it |
 | `EXIF_TOLERANCE_S` | `2` | `|mtime − EXIF|` tolerance in seconds for the `synced` state |
 | `FILES_CACHE_TTL` | `30` | seconds the disk index (`/api/files`) is cached before an automatic rescan, so new downloads show as "on disk" without a manual refresh (`0` = rescan every call, `?refresh=1` forces) |
 | `FILES_MAX` | `50000` | max files indexed by the disk scan (walk stops early, `truncated: true` reported) |
@@ -210,12 +211,18 @@ but not downloaded (failed download, anti-bot rejection, "already downloaded" sk
   (on disk, not in logs), and `in_log` per file in the Files tab (with a
   "not in logs" filter).
 - **Album names**: taken from the download directory title gallery-dl itself created
-  (`…/<title> (a.<id>)`) — i.e. the name as downloaded. Optional override/fallback via
-  `config/albums-names.txt` (`<a.set_id or url> <name>` per line, single-file mount).
+  (`…/<title> (a.<id>)`) — i.e. the name as downloaded, nothing to maintain.
   Names show in the Tree and Albums tabs.
+- **Per-photo state** (log signal × disk presence, matched by fbid), shown as a badge
+  on every photo and aggregated per album (`states`): `downloaded` = downloaded per
+  logs **and** on disk (téléchargée + sauvegardée) · `on_disk_only` = on disk but no
+  download line in the log (déjà existante / skipped from a previous run) ·
+  `missing_on_disk` = log says downloaded but the file is not on disk · `failed` =
+  download error (anti-bot rejection, HTTP error, …) · `pending` = page seen, nothing
+  downloaded yet.
 - A photo seen in the log but without a download line (e.g. skipped because the file
-  was already on disk from a previous run) stays `pending` in the tree, but is shown
-  `downloaded` + `on_disk` in the album detail when its fbid is found on disk.
+  was already on disk from a previous run) keeps `pending` as its raw log status, and
+  gets the explicit state `on_disk_only` once its fbid is found on disk.
 - The Tree tab auto-expands only the **most recent** session and album; everything
   else stays collapsed.
 
