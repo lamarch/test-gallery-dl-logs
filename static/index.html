@@ -186,9 +186,10 @@ let TZ = "UTC";
 let tzFmt = null;
 function tzFormatter() {
   if (!tzFmt) {
-    const opts = { timeZone: TZ, year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false };
-    try { tzFmt = new Intl.DateTimeFormat(undefined, opts); }
-    catch (e) { TZ = "UTC"; tzFmt = new Intl.DateTimeFormat(undefined, Object.assign({}, opts, { timeZone: "UTC" })); }
+    // fr-FR + 2-digit year -> DD/MM/YY HH:MM:SS
+    const opts = { timeZone: TZ, day: "2-digit", month: "2-digit", year: "2-digit", hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false };
+    try { tzFmt = new Intl.DateTimeFormat("fr-FR", opts); }
+    catch (e) { TZ = "UTC"; tzFmt = new Intl.DateTimeFormat("fr-FR", Object.assign({}, opts, { timeZone: "UTC" })); }
   }
   return tzFmt;
 }
@@ -480,6 +481,26 @@ function renderOverview(o) {
       "</h3><div class='stat'>sessions: " + a.sessions.map(x => "#" + x).join(", ") +
       " · " + statsLine(a) + " · 💾 on disk: <b>" + a.on_disk + "</b> files" +
       (a.end_reason ? " · end: " + esc(a.end_reason) : "") + "</div>";
+    for (const sd of (a.session_details || [])) {
+      const det = document.createElement("details");
+      const sum = document.createElement("summary");
+      sum.innerHTML = "🔄 session <b>#" + sd.session + "</b> · " + fmtTs(sd.start) + " → " + fmtTs(sd.end) +
+        " " + badge(sd.status, sd.status) +
+        ' <span class="stat">' + sd.photos_n + " photos · " + sd.files + " files · " + humanSize(sd.bytes) +
+        (sd.sleeps ? " · 💤 " + sd.sleeps.toFixed(1) + "s" : "") +
+        (sd.errors ? " · ✖ " + sd.errors : "") + (sd.rejections ? " · 🚫 " + sd.rejections : "") + "</span>";
+      det.appendChild(sum);
+      const box = document.createElement("div");
+      box.className = "tree-indent";
+      det.appendChild(box);
+      let loaded = false;
+      det.addEventListener("toggle", async () => {
+        if (!det.open || loaded) return;
+        loaded = true;
+        await loadAlbumPhotos(sd.session, sd.album_idx, box, 0);
+      });
+      card.appendChild(det);
+    }
     el.appendChild(card);
   }
   applyAnchor();

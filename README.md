@@ -96,7 +96,9 @@ at every `[gallery-dl][debug] Version …` line, so restarts/power cuts are visi
   log lines** (`/api/photo/{s}/{a}/{p}/logs`).
 
 ### Albums — cross-session view
-Album-centric (keyed by set id, not chronological): which sessions touched it, a
+Album-centric (keyed by set id, not chronological): which sessions touched it — each
+session is listed and expandable, showing **that session's photos** (paginated, with
+status, fbid links, on-disk state and per-photo logs) — a
 **retried** badge when an album appears in more than one session (e.g. after a crash
 or an anti-bot ban), total photos/files/bytes/sleeps, errors, rejections, and how
 many files are actually on disk. Deep-linkable with `#album=<set_id>` anchors.
@@ -125,6 +127,12 @@ match.)
 Log line format handled (verified against gallery-dl 1.32.21 output):
 `[2026-11-22 18:40:12] [facebook][debug] …` and the default `[facebook][debug] …`;
 legacy non-interpolated lines (`[%(asctime)s][%(levelname)s] …`) are shown as "other".
+
+**Photos vs files**: `photos_n` counts `"GET /photo/?fbid=…` lines = photo pages visited
+in the album; `files` counts `[downloader.http][debug] Adjusting filename extension of
+'…' to '…'` lines = files actually written to disk. They differ when a photo page was
+seen but not downloaded (failed download, anti-bot rejection, "already downloaded"
+skip) — and can differ the other way for multi-file posts.
 
 ## Environment variables (service `webui` in your compose)
 
@@ -160,7 +168,7 @@ legacy non-interpolated lines (`[%(asctime)s][%(levelname)s] …`) are shown as 
 | `GET /api/album/{s}/{a}?offset=O&limit=N` | one album + its photos (paginated, merged with the disk index: `on_disk`, `path`, `link_photo`) |
 | `GET /api/album/{s}/{a}/logs` | raw log lines of that album |
 | `GET /api/photo/{s}/{a}/{p}/logs` | raw log lines of that photo |
-| `GET /api/albums_overview` | album-centric cross-session aggregation (`retried`, `on_disk`, stats) |
+| `GET /api/albums_overview` | album-centric cross-session aggregation: `session_details` lists each session with its own stats (`album_idx`, `photos_n`, `files`, `status`, …) so the UI can show per-session photos; plus `retried`, `on_disk`, totals |
 | `GET /api/files?refresh=1` | disk index of `DOWNLOADS_DIR` (images only, `logs/` skipped) |
 | `GET /api/file?path=REL` | serve one image (traversal-safe) |
 | `GET /api/exif?path=REL` | EXIF DateTimeOriginal vs mtime → `synced` / `mismatch` / `no_exif` + filename date |
@@ -183,7 +191,8 @@ legacy non-interpolated lines (`[%(asctime)s][%(levelname)s] …`) are shown as 
   the log and the downloads without issues.
 - Log timestamps are written in UTC. Set `DISPLAY_TZ` (e.g. `Europe/Paris`) in the
   webui service environment to display every timestamp (log lines, tree, chips, files
-  mtime) in that timezone; raw API/JSON-export values stay UTC.
+  mtime) in that timezone, formatted `DD/MM/YY HH:MM:SS` (fr-FR); raw API/JSON-export
+  values stay UTC.
 
 ## Development / tests
 

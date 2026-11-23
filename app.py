@@ -643,11 +643,17 @@ def albums_overview():
             key = a["set_id"] or a["url"]
             e = agg.setdefault(key, {
                 "key": key, "url": a["url"], "set_id": a["set_id"], "vanity": a["vanity"],
-                "link": a["link"], "sessions": [], "status": a["status"],
+                "link": a["link"], "sessions": [], "session_details": [], "status": a["status"],
                 "end_reason": a.get("end_reason"), "photos": 0, "files": 0, "bytes": 0,
                 "sleeps": 0.0, "errors": 0, "rejections": 0,
                 "on_disk": len(by_set.get("a." + a["set_id"], [])) if a["set_id"] else 0})
             e["sessions"].append(s["idx"])
+            e["session_details"].append({
+                "session": s["idx"], "album_idx": a["idx"],
+                "session_start": s["start"], "start": a["start"], "end": a["end"],
+                "photos_n": a["photos_n"], "files": a["files"], "bytes": a["bytes"],
+                "sleeps": a["sleeps"], "errors": a["errors"], "rejections": a["rejections"],
+                "status": a["status"], "end_reason": a.get("end_reason")})
             e["photos"] += a["photos_n"]
             e["files"] += a["files"]
             e["bytes"] += a["bytes"]
