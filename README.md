@@ -65,6 +65,18 @@ docker compose up -d --build webui
   pause, auto-scroll, counters (lines, jobs, warnings, errors, file size), raw log
   download (`/api/raw`).
 
+### Scraping rejection detection
+
+Lines matching common anti-bot / rejection patterns are counted as `rejections` in
+`GET /api/stats` and highlighted in the UI with a red banner (click it to show only
+those lines). Patterns are based on gallery-dl 1.32.21's Facebook extractor and
+exception classes: `You've been temporarily blocked from viewing images.`,
+`AuthRequired` / `AuthorizationError` / `AuthenticationError` / `Invalid login
+credentials` / `cookies needed`, `ChallengeError` / captcha names, `HttpError`
+with status 401/403/429, `429 Too Many Requests`, `This content isn't available`.
+If a rejection message you hit is not detected, paste the exact log line and the
+pattern will be added.
+
 Log line format handled (verified against gallery-dl 1.32.21 output):
 `[2026-11-22 18:40:12] [facebook][debug] …` and the default `[facebook][debug] …`;
 legacy non-interpolated lines (`[%(asctime)s][%(levelname)s] …`) are shown as "other".

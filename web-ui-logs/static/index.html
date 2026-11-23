@@ -28,6 +28,10 @@ label.lvl{display:flex;gap:4px;align-items:center;color:var(--muted);font-size:1
 #st-path{max-width:280px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 #dot{width:9px;height:9px;border-radius:50%;background:var(--error);display:inline-block}
 #dot.on{background:var(--ok)}
+#rej-banner{display:none;color:var(--error);font-weight:600;cursor:pointer;
+  padding:2px 8px;border:1px solid var(--error);border-radius:6px;font-size:12px}
+#rej-banner.active{background:rgba(248,81,73,.2)}
+.line.rej{font-weight:600}
 #notice{display:none;padding:4px 12px;background:rgba(31,111,235,.15);color:var(--info);
   border-bottom:1px solid var(--border);font-size:12px}
 #paused{display:none;padding:4px 12px;background:rgba(210,153,34,.15);color:var(--warning);
@@ -56,6 +60,7 @@ a{color:var(--info);text-decoration:none}
 <body>
 <header>
   <span class="title">fb-dl</span>
+  <span id="rej-banner" title="scraping rejections detected in the log"></span>
   <input id="search" type="search" placeholder="Search logs…">
   <span id="search-count"></span>
   <label class="lvl"><input type="checkbox" class="cb" data-lvl="debug" checked>debug</label>
@@ -98,6 +103,12 @@ const searchCount = document.getElementById("search-count");
 const pausedEl = document.getElementById("paused");
 const noticeEl = document.getElementById("notice");
 const dot = document.getElementById("dot");
+const rejBanner = document.getElementById("rej-banner");
+rejBanner.addEventListener("click", () => {
+  onlyRej = !onlyRej;
+  rejBanner.classList.toggle("active", onlyRej);
+  refilter();
+});
 const albumsPanel = document.getElementById("albums-panel");
 const albumsList = document.getElementById("albums-list");
 const CHUNK = 5000;
@@ -113,6 +124,9 @@ let searchTimer = null;
 // "[{asctime}] [{name}][{levelname}] {message}" or "[{name}][{levelname}] {message}"
 const LEVEL_RE = /^(?:\[[^\]]*\]\s*)?\[[^\]]*\]\[(debug|info|warning|error|critical)\]/;
 const PROGRESS_RE = /^\[\d+\/\d+\]/;
+// keep in sync with REJECTION_RE in app.py
+const REJECTION_RE = /temporarily blocked|blocked from viewing|must be logged in|logged in to continue|AuthRequired|AuthorizationError|AuthenticationError|Invalid login credentials|credentials required|cookies needed|Too Many Requests|\b429\b|ChallengeError|captcha|FunCaptcha|GeeTest|hCaptcha|HttpError: '(?:401|403|429)|content isn't available/i;
+let onlyRej = false;
 
 function levelOf(line) {
   const m = LEVEL_RE.exec(line);
@@ -122,6 +136,7 @@ function levelOf(line) {
 }
 
 function isVisible(el) {
+  if (onlyRej && !el.dataset.rej) return false;
   const q = searchEl.value.trim().toLowerCase();
   if (q && !el.textContent.toLowerCase().includes(q)) return false;
   let lvl = el.dataset.lvl;
@@ -135,6 +150,10 @@ function appendLine(line) {
   const div = document.createElement("div");
   div.className = "line " + lvl;
   div.dataset.lvl = lvl;
+  if (REJECTION_RE.test(line)) {
+    div.dataset.rej = "1";
+    div.classList.add("rej");
+  }
   div.textContent = line;
   if (!isVisible(div)) div.classList.add("hidden");
   logEl.appendChild(div);
@@ -197,6 +216,14 @@ async function pollStats() {
     document.getElementById("st-jobs").textContent = s.jobs;
     document.getElementById("st-warn").textContent = s.warnings;
     document.getElementById("st-err").textContent = s.errors;
+    const nrej = s.rejections || 0;
+    if (nrej > 0) {
+      rejBanner.style.display = "";
+      rejBanner.textContent = "⚠ " + nrej + " scraping rejection(s) — click to show only those";
+    } else {
+      rejBanner.style.display = "none";
+      if (onlyRej) { onlyRej = false; rejBanner.classList.remove("active"); refilter(); }
+    }
     const st = await (await fetch("/api/status")).json();
     document.getElementById("st-size").textContent = st.exists
       ? (st.size / 1048576).toFixed(1) + " MiB"
