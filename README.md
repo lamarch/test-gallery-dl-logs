@@ -1,38 +1,40 @@
-# fb-dl log dashboard
+# web-dashboard — live log viewer for gallery-dl (fb-dl)
 
-Self-contained Docker Compose project: your `fb-dl` gallery-dl service plus a `webui`
-container that serves a live log dashboard (with album tracking) behind **Caddy** —
-no published ports, only an external `caddy` Docker network.
+This repo is the **content of the `web-dashboard/` folder** of your gallery-dl
+project: a self-contained Docker image (Dockerfile at the repo root) that serves a
+web UI to follow the `fb-dl` container's log file live and track album progress.
+It publishes **no port** — it is served by **Caddy** on a private Docker network.
 
-`config/` (cookies, gallery-dl.conf, albums.txt) and `downloads-2/` are **gitignored**:
-they live only on your machine.
+## Expected layout
+
+```
+./gallery-dl/                     <- compose project directory (your own, out of git)
+├── compose.yml                   <- your compose: fb-dl + webui (snippet: compose.example.yml)
+├── config/                       <- gallery-dl.conf, fb-cookies.txt, albums.txt (never commit)
+├── downloads-2/                  <- downloads + logs/fb-dl.log
+└── web-dashboard/                <- THIS repo (the build context of the webui service)
+    ├── Dockerfile
+    ├── app.py  tailer.py  static/  requirements*.txt  test_*.py
+    └── compose.example.yml       <- snippet to paste into ../compose.yml
+```
+
+If you ever `git init` the parent `gallery-dl/` project, add `config/` and
+`downloads-2/` to its `.gitignore` (cookies + downloaded media must stay out of git).
 
 ## Quickstart
 
 ```bash
-git clone https://github.com/lamarch/test-gallery-dl-logs.git
-cd test-gallery-dl-logs
+cd gallery-dl
+git clone https://github.com/lamarch/test-gallery-dl-logs.git web-dashboard
+# paste the `webui` service from web-dashboard/compose.example.yml into your
+# compose.yml (under the existing `services:` key) + the top-level `networks: caddy: external: true`
+# Caddyfile:  logs.example.tld { reverse_proxy fb-dl-dashboard:8081 }
 
-# 1. drop your private data into the gitignored dirs:
-#      config/gallery-dl.conf   config/fb-cookies.txt   config/albums.txt
-#      downloads-2/             (created automatically on first run if missing)
-# 2. make sure the gallery-dl image exists (build it once from gallery-dl sources):
-#      docker build -t gallery-dl:latest .
-# 3. Caddyfile:
-#      logs.example.tld { reverse_proxy fb-dl-dashboard:8081 }
-
-docker compose up -d --build     # builds web-ui-logs and starts everything
+docker compose up -d --build webui   # builds ./web-dashboard and starts the dashboard
+docker compose up -d fb-dl            # your scraper, unchanged
 ```
 
-Then open `https://logs.example.tld`. Run the scraper with `docker compose up -d fb-dl`
-(or `restart fb-dl`); `docker compose logs -f fb-dl` still works as before.
-
-## Layout
-
-- `compose.yml` — `fb-dl` (your service, unchanged) + `webui` (built from source).
-- `web-ui-logs/` — the self-contained webui image: Dockerfile + FastAPI app
-  (`app.py`, `tailer.py`) + static UI (`static/index.html`) + tests.
-- `.github/workflows/ci.yml` — tests, image build, compose validation.
+Then open `https://logs.example.tld`. `docker compose logs -f fb-dl` still works.
 
 ## Features
 
@@ -45,15 +47,15 @@ Then open `https://logs.example.tld`. Run the scraper with `docker compose up -d
   (`GET /api/albums` + UI panel): lines commented out by gallery-dl (`# url`) =
   **done**; URLs seen in the log (`Starting …Job for '<url>'`) but not done =
   **incomplete**; the rest = **not started**.
-- **Scraping rejection detection**: lines matching common anti-bot / rejection
-  patterns are counted as `rejections` in `GET /api/stats` and highlighted in the UI
-  with a red banner (click it to show only those lines). Patterns are based on
-  gallery-dl 1.32.21's Facebook extractor and exception classes: `You've been
-  temporarily blocked from viewing images.`, `AuthRequired` / `AuthorizationError` /
-  `AuthenticationError` / `Invalid login credentials` / `cookies needed`,
-  `ChallengeError` / captcha names, `HttpError` with status 401/403/429,
-  `429 Too Many Requests`, `This content isn't available`. If a rejection message you
-  hit is not detected, paste the exact log line and the pattern will be added.
+- **Scraping rejection detection**: lines matching anti-bot / rejection patterns are
+  counted as `rejections` in `GET /api/stats` and highlighted in the UI with a red
+  banner (click it to show only those lines). Patterns based on gallery-dl 1.32.21's
+  Facebook extractor: `You've been temporarily blocked from viewing images.`,
+  `AuthRequired` / `AuthorizationError` / `AuthenticationError` / `Invalid login
+  credentials` / `cookies needed`, `ChallengeError` / captcha names, `HttpError`
+  401/403/429, `429 Too Many Requests`, `This content isn't available`. If a
+  rejection message you hit is not detected, paste the exact log line and the pattern
+  will be added.
 - Level coloring + filters (debug / info / warning / error / other), text filter,
   pause, auto-scroll, counters (lines, jobs, warnings, errors, rejections, file size),
   raw log download (`/api/raw`).
@@ -62,7 +64,7 @@ Log line format handled (verified against gallery-dl 1.32.21 output):
 `[2026-11-22 18:40:12] [facebook][debug] …` and the default `[facebook][debug] …`;
 legacy non-interpolated lines (`[%(asctime)s][%(levelname)s] …`) are shown as "other".
 
-## Environment variables (service `webui`)
+## Environment variables (service `webui` in your compose)
 
 | Var | Default | Description |
 |---|---|---|
@@ -89,20 +91,20 @@ legacy non-interpolated lines (`[%(asctime)s][%(levelname)s] …`) are shown as 
 ## Notes
 
 - With `mode: "a"` in gallery-dl.conf the log accumulates across runs — rotate or purge
-  `downloads-2/logs/fb-dl.log` from time to time.
+  `downloads-2/logs/fb-dl.log` from time to time (the app detects truncation/rotation).
 - If you change `output.logfile.path` in `config/gallery-dl.conf`, update `LOG_FILE`
-  in `compose.yml`.
+  in your compose.
 - `fb-dl` runs as `1000:1000`; the webui container (root) can read the log without issues.
 
 ## Development / tests
 
 ```bash
-cd web-ui-logs
 python -m venv .venv && . .venv/bin/activate
 pip install -r requirements.txt -r requirements-dev.txt
 python -m unittest test_tailer test_api -v
 LOG_FILE=/tmp/fb-dl.log ALBUMS_FILE=/tmp/albums.txt uvicorn app:app --port 8081
 ```
 
-CI runs those tests, builds the Docker image and validates `compose.yml`
-(including the assertion that `webui` publishes no ports).
+CI (`.github/workflows/ci.yml`) runs those tests, builds the image from the repo root
+and validates `compose.example.yml` (no `ports`, `build: ./web-dashboard`, external
+caddy network).

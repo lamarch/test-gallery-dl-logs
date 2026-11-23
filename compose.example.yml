@@ -1,0 +1,23 @@
+# Snippet to paste into YOUR compose.yml at the project root
+# (./gallery-dl/compose.yml), under the existing `services:` key, next to fb-dl.
+# This repo's content is expected in ./web-dashboard/ (the build context).
+# If your compose already has a top-level `networks:` section, merge the
+# `caddy` entry into it instead of redeclaring it.
+services:
+  webui:
+    build: ./web-dashboard
+    container_name: fb-dl-dashboard
+    restart: unless-stopped
+    environment:
+      LOG_FILE: /downloads/logs/fb-dl.log   # output.logfile.path from config/gallery-dl.conf
+      ALBUMS_FILE: /config/albums.txt       # the -I input file
+      MAX_RENDER_LINES: "20000"             # optional: browser DOM cap
+    volumes:
+      - ./downloads-2:/downloads:ro         # same mount as fb-dl, read-only
+      - ./config:/config:ro                 # contains cookies: keep it out of git
+    networks:
+      - caddy
+
+networks:
+  caddy:
+    external: true
