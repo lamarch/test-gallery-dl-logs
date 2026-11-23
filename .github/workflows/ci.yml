@@ -34,11 +34,17 @@ jobs:
           import yaml
           doc = yaml.safe_load(open("compose.example.yml"))
           svc = doc["services"]["webui"]
+          vols = svc["volumes"]
           assert "ports" not in svc, "webui must not publish ports"
           assert svc["build"] == "./web-dashboard", svc["build"]
           assert "caddy" in svc["networks"]
           assert doc["networks"]["caddy"]["external"] is True
+          assert "./downloads-2:/downloads:ro" in vols
+          assert "./config/albums.txt:/config/albums.txt:ro" in vols
+          assert not any(v.split(":")[0] == "./config" for v in vols), \
+              "the whole config dir (cookies!) must never be mounted into webui"
           assert svc["environment"]["LOG_FILE"] == "/downloads/logs/fb-dl.log"
+          assert svc["environment"]["ALBUMS_FILE"] == "/config/albums.txt"
           print("compose.example.yml OK")
           PY
           docker compose -f compose.example.yml config --quiet && echo "docker compose config OK"

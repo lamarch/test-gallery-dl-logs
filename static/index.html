@@ -4,6 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>fb-dl — log viewer</title>
+<link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
 <style>
 :root{
   --bg:#0d1117;--panel:#161b22;--border:#30363d;--fg:#e6edf3;--muted:#8b949e;
@@ -16,22 +17,25 @@ header{display:flex;flex-wrap:wrap;gap:8px;align-items:center;padding:8px 12px;
   background:var(--panel);border-bottom:1px solid var(--border)}
 .title{font-weight:700;margin-right:6px}
 input[type=search]{background:var(--bg);border:1px solid var(--border);color:var(--fg);
-  border-radius:6px;padding:4px 8px;width:240px;font:inherit}
+  border-radius:6px;padding:4px 8px;width:220px;font:inherit}
 #search-count{color:var(--muted);font-size:12px}
 button{background:var(--bg);border:1px solid var(--border);color:var(--fg);border-radius:6px;
   padding:4px 10px;cursor:pointer;font:inherit}
 button:hover{border-color:var(--muted)}
+button:disabled{opacity:.4;cursor:default}
 button.active{background:rgba(31,111,235,.25);border-color:#1f6feb}
 label.lvl{display:flex;gap:4px;align-items:center;color:var(--muted);font-size:12px;cursor:pointer;user-select:none}
 #stats{margin-left:auto;display:flex;gap:14px;align-items:center;color:var(--muted);font-size:12px;flex-wrap:wrap}
 #stats b{color:var(--fg)}
-#st-path{max-width:280px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+#st-path{max-width:240px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 #dot{width:9px;height:9px;border-radius:50%;background:var(--error);display:inline-block}
 #dot.on{background:var(--ok)}
 #rej-banner{display:none;color:var(--error);font-weight:600;cursor:pointer;
   padding:2px 8px;border:1px solid var(--error);border-radius:6px;font-size:12px}
 #rej-banner.active{background:rgba(248,81,73,.2)}
-.line.rej{font-weight:600}
+#statusbar{padding:4px 12px;background:var(--panel);border-bottom:1px solid var(--border);
+  color:var(--muted);font-size:12px;white-space:nowrap;overflow-x:auto}
+#statusbar b{color:var(--fg)}
 #notice{display:none;padding:4px 12px;background:rgba(31,111,235,.15);color:var(--info);
   border-bottom:1px solid var(--border);font-size:12px}
 #paused{display:none;padding:4px 12px;background:rgba(210,153,34,.15);color:var(--warning);
@@ -53,6 +57,9 @@ label.lvl{display:flex;gap:4px;align-items:center;color:var(--muted);font-size:1
 .line.warning{color:var(--warning)}
 .line.error{color:var(--error)}
 .line.download{color:var(--ok)}
+.line.rej{font-weight:600}
+.line.event .ts{color:var(--muted)}
+.line.event .icon{display:inline-block;width:1.8em}
 .line.hidden{display:none}
 a{color:var(--info);text-decoration:none}
 </style>
@@ -68,6 +75,9 @@ a{color:var(--info);text-decoration:none}
   <label class="lvl"><input type="checkbox" class="cb" data-lvl="warning" checked>warning</label>
   <label class="lvl"><input type="checkbox" class="cb" data-lvl="error" checked>error</label>
   <label class="lvl"><input type="checkbox" class="cb" data-lvl="other" checked>other</label>
+  <button id="btn-view-raw" class="active">Raw</button>
+  <button id="btn-view-parsed">Parsed</button>
+  <button id="btn-earlier" disabled>⤒ Load earlier</button>
   <button id="btn-albums" style="display:none">Albums <b id="al-counts"></b></button>
   <button id="btn-pause">⏸ Pause</button>
   <button id="btn-scroll" class="active">↓ Auto-scroll</button>
@@ -83,6 +93,7 @@ a{color:var(--info);text-decoration:none}
     <span id="st-path"></span>
   </div>
 </header>
+<div id="statusbar">waiting for log…</div>
 <div id="albums-panel">
   <div class="alb-filters">
     <button class="alb-filter active" data-f="all">all</button>
@@ -104,19 +115,21 @@ const pausedEl = document.getElementById("paused");
 const noticeEl = document.getElementById("notice");
 const dot = document.getElementById("dot");
 const rejBanner = document.getElementById("rej-banner");
-rejBanner.addEventListener("click", () => {
-  onlyRej = !onlyRej;
-  rejBanner.classList.toggle("active", onlyRej);
-  refilter();
-});
+const statusbar = document.getElementById("statusbar");
 const albumsPanel = document.getElementById("albums-panel");
 const albumsList = document.getElementById("albums-list");
-const CHUNK = 5000;
+const earlierBtn = document.getElementById("btn-earlier");
+const INITIAL_TAIL = 1000;
 let MAX_NODES = 20000;
 let offset = 0;
+let firstOffset = 0;
+let hasMore = false;
 let paused = false;
 let pending = [];
 let autoScroll = true;
+let onlyRej = false;
+let viewMode = "raw";
+let allLines = [];
 let albFilter = "all";
 let lastAlbums = null;
 let searchTimer = null;
@@ -124,9 +137,9 @@ let searchTimer = null;
 // "[{asctime}] [{name}][{levelname}] {message}" or "[{name}][{levelname}] {message}"
 const LEVEL_RE = /^(?:\[[^\]]*\]\s*)?\[[^\]]*\]\[(debug|info|warning|error|critical)\]/;
 const PROGRESS_RE = /^\[\d+\/\d+\]/;
+const TS_RE = /^\[([^\]]+)\]\s*\[([^\]]*)\]\[(\w+)\]\s?(.*)$/;
 // keep in sync with REJECTION_RE in app.py
 const REJECTION_RE = /temporarily blocked|blocked from viewing|must be logged in|logged in to continue|AuthRequired|AuthorizationError|AuthenticationError|Invalid login credentials|credentials required|cookies needed|Too Many Requests|\b429\b|ChallengeError|captcha|FunCaptcha|GeeTest|hCaptcha|HttpError: '(?:401|403|429)|content isn't available/i;
-let onlyRej = false;
 
 function levelOf(line) {
   const m = LEVEL_RE.exec(line);
@@ -145,20 +158,77 @@ function isVisible(el) {
   return cb ? cb.checked : true;
 }
 
-function appendLine(line) {
+function humanSize(n) {
+  if (n < 1024) return n + " B";
+  if (n < 1048576) return (n / 1024).toFixed(0) + " KiB";
+  return (n / 1048576).toFixed(1) + " MiB";
+}
+
+function trunc(s, n) { return s.length > n ? s.slice(0, n - 1) + "…" : s; }
+
+function parseEvent(line) {
+  const m = TS_RE.exec(line);
+  const ts = m ? m[1] : "";
+  let lvl = m ? m[3].toLowerCase() : "other";
+  if (lvl === "critical") lvl = "error";
+  const msg = m ? m[4] : line;
+  let icon = "•", text = msg, mm;
+  if (REJECTION_RE.test(line)) icon = "🚫";
+  else if ((mm = msg.match(/^Sleeping ([\d.]+) seconds \(([^)]+)\)/))) { icon = "💤"; text = "sleeping " + mm[1] + "s (" + mm[2] + ")"; }
+  else if ((mm = msg.match(/^Starting (\w+)Job for '([^']+)'/))) { icon = "▶"; text = mm[1] + " job — " + mm[2]; }
+  else if ((mm = msg.match(/^Using (\w+) for '([^']+)'/))) { icon = "🔍"; text = mm[1] + " — " + trunc(mm[2], 100); }
+  else if ((mm = msg.match(/"GET ([^"]+) HTTP\/1\.1" (\d{3})(?: (\d+))?$/))) { icon = "🌐"; text = "GET " + mm[2] + (mm[3] ? " (" + humanSize(+mm[3]) + ")" : "") + " — " + trunc(mm[1], 90); }
+  else if ((mm = msg.match(/^Adjusting filename extension of '([^']+)' to '(\w+)'/))) { icon = "🖼"; text = mm[1] + " → ." + mm[2]; }
+  else if (msg.match(/^Failed to download '/)) { icon = "❌"; }
+  else if (/^Starting new HTTPS connection/.test(msg)) { icon = "🔌"; }
+  else if (/^Resetting dropped connection/.test(msg)) { icon = "🔁"; }
+  else icon = { debug: "·", info: "ℹ", warning: "⚠", error: "✖" }[lvl] || "•";
+  return { ts, lvl, icon, text };
+}
+
+function makeDiv(line) {
   const lvl = levelOf(line);
+  const rej = REJECTION_RE.test(line);
   const div = document.createElement("div");
-  div.className = "line " + lvl;
   div.dataset.lvl = lvl;
-  if (REJECTION_RE.test(line)) {
-    div.dataset.rej = "1";
-    div.classList.add("rej");
+  if (rej) div.dataset.rej = "1";
+  let cls = "line";
+  if (viewMode === "parsed") {
+    const ev = parseEvent(line);
+    cls += " event " + ev.lvl;
+    const ts = document.createElement("span");
+    ts.className = "ts";
+    ts.textContent = ev.ts ? ev.ts + " " : "";
+    const ic = document.createElement("span");
+    ic.className = "icon";
+    ic.textContent = ev.icon;
+    const tx = document.createElement("span");
+    tx.textContent = ev.text;
+    div.append(ts, ic, tx);
+  } else {
+    cls += " " + lvl;
+    div.textContent = line;
   }
-  div.textContent = line;
+  if (rej) cls += " rej";
+  div.className = cls;
   if (!isVisible(div)) div.classList.add("hidden");
-  logEl.appendChild(div);
+  return div;
+}
+
+function appendLine(line) {
+  allLines.push(line);
+  if (allLines.length > MAX_NODES) allLines.shift();
+  logEl.appendChild(makeDiv(line));
   while (logEl.childElementCount > MAX_NODES) logEl.firstChild.remove();
   if (autoScroll && !paused) logEl.scrollTop = logEl.scrollHeight;
+}
+
+function prependLines(lines) {
+  allLines = lines.concat(allLines);
+  if (allLines.length > MAX_NODES) allLines = allLines.slice(-MAX_NODES);
+  const frag = document.createDocumentFragment();
+  for (const line of lines) frag.appendChild(makeDiv(line));
+  logEl.insertBefore(frag, logEl.firstChild);
 }
 
 function setDot(on) { dot.classList.toggle("on", on); }
@@ -181,55 +251,59 @@ function connect() {
   es.onerror = () => setDot(false);
 }
 
-// Load the whole log file from byte 0, in chunks, then follow live.
+function setPath(p) {
+  document.getElementById("st-path").textContent = p;
+  document.getElementById("st-path").title = p;
+}
+
+function updateEarlierBtn() { earlierBtn.disabled = !hasMore; }
+
+// Initial load: only the tail (fast), then live stream. Older history is
+// loaded on demand with the "Load earlier" button.
 async function loadHistory() {
-  let loaded = 0;
   try {
-    while (true) {
-      const r = await fetch("/api/logs?offset=" + offset + "&limit=" + CHUNK);
-      const data = await r.json();
-      if (offset === 0) {
-        MAX_NODES = data.max_render || MAX_NODES;
-        document.getElementById("st-path").textContent = data.path;
-        document.getElementById("st-path").title = data.path;
-      }
-      if (data.lines.length) {
-        data.lines.forEach(appendLine);
-        loaded += data.lines.length;
-      }
-      offset = data.offset;
-      if (data.eof || data.lines.length === 0 || loaded >= MAX_NODES) break;
+    const r = await fetch("/api/logs?tail=" + INITIAL_TAIL);
+    const data = await r.json();
+    MAX_NODES = data.max_render || MAX_NODES;
+    setPath(data.path);
+    firstOffset = data.start_offset;
+    hasMore = data.has_more;
+    updateEarlierBtn();
+    const frag = document.createDocumentFragment();
+    for (const line of data.lines) { allLines.push(line); frag.appendChild(makeDiv(line)); }
+    logEl.appendChild(frag);
+    if (allLines.length >= MAX_NODES) {
+      noticeEl.style.display = "block";
+      noticeEl.textContent = "Display capped at " + MAX_NODES + " lines. Use \"Load earlier\" or the search box (match count covers the scanned file).";
     }
+    offset = data.offset;
   } catch (e) { /* log file does not exist yet */ }
-  if (loaded >= MAX_NODES) {
-    noticeEl.style.display = "block";
-    noticeEl.textContent = "Display capped at " + MAX_NODES + " lines (oldest dropped). " +
-      "The full file is still searchable: the match count next to the search box covers the whole file.";
-  }
   connect();
 }
 
-async function pollStats() {
+async function loadEarlier() {
+  if (!hasMore) return;
+  earlierBtn.disabled = true;
   try {
-    const s = await (await fetch("/api/stats")).json();
-    document.getElementById("st-lines").textContent = s.lines;
-    document.getElementById("st-jobs").textContent = s.jobs;
-    document.getElementById("st-warn").textContent = s.warnings;
-    document.getElementById("st-err").textContent = s.errors;
-    const nrej = s.rejections || 0;
-    if (nrej > 0) {
-      rejBanner.style.display = "";
-      rejBanner.textContent = "⚠ " + nrej + " scraping rejection(s) — click to show only those";
-    } else {
-      rejBanner.style.display = "none";
-      if (onlyRej) { onlyRej = false; rejBanner.classList.remove("active"); refilter(); }
-    }
-    const st = await (await fetch("/api/status")).json();
-    document.getElementById("st-size").textContent = st.exists
-      ? (st.size / 1048576).toFixed(1) + " MiB"
-      : "no log file yet";
+    const r = await fetch("/api/logs?before=" + firstOffset + "&limit=2000");
+    const data = await r.json();
+    firstOffset = data.start_offset;
+    hasMore = data.has_more;
+    prependLines(data.lines);
   } catch (e) { /* ignore */ }
-  setTimeout(pollStats, 5000);
+  updateEarlierBtn();
+}
+
+function toggleView(mode) {
+  if (viewMode === mode) return;
+  viewMode = mode;
+  document.getElementById("btn-view-raw").classList.toggle("active", mode === "raw");
+  document.getElementById("btn-view-parsed").classList.toggle("active", mode === "parsed");
+  logEl.innerHTML = "";
+  const frag = document.createDocumentFragment();
+  for (const line of allLines) frag.appendChild(makeDiv(line));
+  logEl.appendChild(frag);
+  if (autoScroll) logEl.scrollTop = logEl.scrollHeight;
 }
 
 function renderAlbums() {
@@ -247,8 +321,25 @@ function renderAlbums() {
   }
 }
 
-async function pollAlbums() {
+async function poll() {
   try {
+    const s = await (await fetch("/api/stats")).json();
+    document.getElementById("st-lines").textContent = s.lines + (s.truncated ? " (tail)" : "");
+    document.getElementById("st-jobs").textContent = s.jobs;
+    document.getElementById("st-warn").textContent = s.warnings;
+    document.getElementById("st-err").textContent = s.errors;
+    const nrej = s.rejections || 0;
+    if (nrej > 0) {
+      rejBanner.style.display = "";
+      rejBanner.textContent = "⚠ " + nrej + " scraping rejection(s) — click to show only those";
+    } else {
+      rejBanner.style.display = "none";
+      if (onlyRej) { onlyRej = false; rejBanner.classList.remove("active"); refilter(); }
+    }
+    const st = await (await fetch("/api/status")).json();
+    document.getElementById("st-size").textContent = st.exists
+      ? (st.size / 1048576).toFixed(1) + " MiB" : "no log file yet";
+
     const a = await (await fetch("/api/albums")).json();
     const btn = document.getElementById("btn-albums");
     if (!a.available) {
@@ -260,8 +351,22 @@ async function pollAlbums() {
         "✓" + a.counts.done + " ◐" + a.counts.incomplete + " ○" + a.counts.not_started;
       if (albumsPanel.classList.contains("open")) renderAlbums();
     }
+
+    const parts = [];
+    if (s.last_sleep) {
+      const until = Date.parse(s.last_sleep.at.replace(" ", "T")) + s.last_sleep.seconds * 1000;
+      parts.push("💤 sleeping " + s.last_sleep.seconds + "s (" + s.last_sleep.reason + ")" +
+        (Date.now() < until ? " — wakes " + new Date(until).toLocaleTimeString() : " — (elapsed)"));
+    } else {
+      parts.push("▶ working");
+    }
+    if (s.current_album) parts.push("▶ album " + trunc(s.current_album, 60) + " — 🖼 " + s.current_album_files + " files");
+    if (a.available) parts.push("📁 albums " + a.counts.done + "/" + a.counts.total +
+      (a.current ? " — current: " + trunc(a.current, 50) : " — all done ✓"));
+    parts.push("🖼 " + s.files + " files total");
+    statusbar.textContent = parts.join("  |  ");
   } catch (e) { /* ignore */ }
-  setTimeout(pollAlbums, 5000);
+  setTimeout(poll, 5000);
 }
 
 function refilter() {
@@ -278,12 +383,20 @@ searchEl.addEventListener("input", () => {
   searchTimer = setTimeout(async () => {
     try {
       const s = await (await fetch("/api/search?q=" + encodeURIComponent(q) + "&limit=1")).json();
-      searchCount.textContent = s.count + " match(es) in full file";
+      searchCount.textContent = s.count + " match(es)" + (s.truncated ? " (tail scan)" : "");
     } catch (e) { /* ignore */ }
   }, 300);
 });
 document.querySelectorAll(".cb").forEach(cb => cb.addEventListener("change", refilter));
 
+rejBanner.addEventListener("click", () => {
+  onlyRej = !onlyRej;
+  rejBanner.classList.toggle("active", onlyRej);
+  refilter();
+});
+document.getElementById("btn-view-raw").addEventListener("click", () => toggleView("raw"));
+document.getElementById("btn-view-parsed").addEventListener("click", () => toggleView("parsed"));
+document.getElementById("btn-earlier").addEventListener("click", loadEarlier);
 document.getElementById("btn-albums").addEventListener("click", () => {
   albumsPanel.classList.toggle("open");
   renderAlbums();
@@ -293,8 +406,7 @@ document.querySelectorAll(".alb-filter").forEach(b => b.addEventListener("click"
   document.querySelectorAll(".alb-filter").forEach(x => x.classList.toggle("active", x === b));
   renderAlbums();
 }));
-
-document.getElementById("btn-clear").addEventListener("click", () => { logEl.innerHTML = ""; });
+document.getElementById("btn-clear").addEventListener("click", () => { logEl.innerHTML = ""; allLines = []; });
 document.getElementById("btn-scroll").addEventListener("click", (e) => {
   autoScroll = !autoScroll;
   e.target.classList.toggle("active", autoScroll);
@@ -314,8 +426,7 @@ document.getElementById("btn-pause").addEventListener("click", (e) => {
 });
 
 loadHistory();
-pollStats();
-pollAlbums();
+poll();
 </script>
 </body>
 </html>

@@ -3,6 +3,11 @@
 # This repo's content is expected in ./web-dashboard/ (the build context).
 # If your compose already has a top-level `networks:` section, merge the
 # `caddy` entry into it instead of redeclaring it.
+#
+# NOTE: mount ONLY config/albums.txt, never the whole config/ dir — it contains
+# fb-cookies.txt and this container does not need it. `touch config/albums.txt`
+# first if the file does not exist yet (a missing single-file bind mount would
+# be created as a directory by Docker).
 services:
   webui:
     build: ./web-dashboard
@@ -10,12 +15,12 @@ services:
     restart: unless-stopped
     environment:
       LOG_FILE: /downloads/logs/fb-dl.log   # output.logfile.path from config/gallery-dl.conf
-      ALBUMS_FILE: /config/albums.txt       # the -I input file
-      MAX_RENDER_LINES: "20000"             # optional: browser DOM cap
-      # SCAN_MAX_BYTES: "268435456"         # optional: cap stats/search scan to the last 256 MiB (log grows unbounded in mode "a")
+      ALBUMS_FILE: /config/albums.txt       # the -I input file (single file mount)
+      MAX_RENDER_LINES: "20000"             # browser DOM cap
+      SCAN_MAX_BYTES: "134217728"           # stats/search scan only the last 128 MiB (log grows unbounded in mode "a")
     volumes:
       - ./downloads-2:/downloads:ro         # same mount as fb-dl, read-only
-      - ./config:/config:ro                 # contains cookies: keep it out of git
+      - ./config/albums.txt:/config/albums.txt:ro
     networks:
       - caddy
 

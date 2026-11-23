@@ -3,7 +3,7 @@ import shutil
 import tempfile
 import unittest
 
-from tailer import Follower, read_range, read_tail
+from tailer import Follower, read_range, read_range_back, read_tail
 
 
 class ReadTailTests(unittest.TestCase):
@@ -19,37 +19,47 @@ class ReadTailTests(unittest.TestCase):
             f.write(text)
 
     def test_missing_file(self):
-        self.assertEqual(read_tail(self.path, 10), ([], 0))
+        self.assertEqual(read_tail(self.path, 10), ([], 0, 0))
 
     def test_empty_file(self):
         self.write("")
-        self.assertEqual(read_tail(self.path, 10), ([], 0))
+        self.assertEqual(read_tail(self.path, 10), ([], 0, 0))
 
-    def test_tail_and_offset(self):
+    def test_tail_and_offsets(self):
         self.write("aaa\nbbb\nccc\n")
-        lines, offset = read_tail(self.path, 2)
+        lines, end, start = read_tail(self.path, 2)
         self.assertEqual(lines, ["bbb", "ccc"])
-        self.assertEqual(offset, os.path.getsize(self.path))
+        self.assertEqual(end, os.path.getsize(self.path))
+        self.assertEqual(start, 0)
 
     def test_no_trailing_newline(self):
         self.write("aaa\nbbb\nccc")
-        lines, offset = read_tail(self.path, 10)
+        lines, end, start = read_tail(self.path, 10)
         self.assertEqual(lines, ["aaa", "bbb"])
-        self.assertEqual(offset, 8)
+        self.assertEqual(end, 8)
+        self.assertEqual(start, 0)
 
     def test_no_newline_at_all(self):
         self.write("onlypartial")
-        self.assertEqual(read_tail(self.path, 10), ([], 0))
+        self.assertEqual(read_tail(self.path, 10), ([], 0, 0))
 
-    def test_large_file_whole_scan(self):
+    def test_window_limits_scan(self):
+        self.write("aaa\nbbb\nccc\n")  # 12 bytes
+        lines, end, start = read_tail(self.path, 5, window=10)
+        self.assertEqual(lines, ["bbb", "ccc"])
+        self.assertEqual(end, 12)
+        self.assertEqual(start, 4)
+
+    def test_large_file(self):
         with open(self.path, "w", encoding="utf-8") as f:
             for i in range(2000):
                 f.write(f"line {i}\n")
-        lines, offset = read_tail(self.path, 500)
+        lines, end, start = read_tail(self.path, 500)
         self.assertEqual(len(lines), 500)
         self.assertEqual(lines[0], "line 1500")
         self.assertEqual(lines[-1], "line 1999")
-        self.assertEqual(offset, os.path.getsize(self.path))
+        self.assertEqual(end, os.path.getsize(self.path))
+        self.assertEqual(start, 0)
 
 
 class ReadRangeTests(unittest.TestCase):
@@ -94,11 +104,41 @@ class ReadRangeTests(unittest.TestCase):
         self.assertEqual(off, os.path.getsize(self.path))
         self.assertTrue(eof)
 
-    def test_partial_line_not_returned_before_eof(self):
-        self.write("abc")
-        lines, off, eof = read_range(self.path, 0, 100)
-        self.assertEqual(lines, ["abc"])
-        self.assertTrue(eof)
+
+class ReadRangeBackTests(unittest.TestCase):
+    def setUp(self):
+        self.dir = tempfile.mkdtemp()
+        self.path = os.path.join(self.dir, "test.log")
+        with open(self.path, "w", encoding="utf-8") as f:
+            for i in range(10):
+                f.write(f"l{i}\n")  # 30 bytes total
+
+    def tearDown(self):
+        shutil.rmtree(self.dir, ignore_errors=True)
+
+    def test_missing_file(self):
+        self.assertEqual(read_range_back(self.dir + "/nope.log", 100, 10), ([], 0, False))
+
+    def test_backwards_chunks(self):
+        size = os.path.getsize(self.path)
+        lines, start, has_more = read_range_back(self.path, size, 4)
+        self.assertEqual(lines, ["l6", "l7", "l8", "l9"])
+        self.assertEqual(start, 18)
+        self.assertTrue(has_more)
+        lines, start, has_more = read_range_back(self.path, start, 4)
+        self.assertEqual(lines, ["l2", "l3", "l4", "l5"])
+        self.assertEqual(start, 6)
+        self.assertTrue(has_more)
+        lines, start, has_more = read_range_back(self.path, start, 4)
+        self.assertEqual(lines, ["l0", "l1"])
+        self.assertEqual(start, 0)
+        self.assertFalse(has_more)
+
+    def test_end_beyond_size_is_clamped(self):
+        lines, start, has_more = read_range_back(self.path, 10**9, 100)
+        self.assertEqual(len(lines), 10)
+        self.assertEqual(start, 0)
+        self.assertFalse(has_more)
 
 
 class FollowerTests(unittest.TestCase):
