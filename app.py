@@ -9,6 +9,8 @@ from collections import Counter
 from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
+from urllib.parse import parse_qsl, urlsplit
+
 from fastapi import FastAPI, HTTPException, Query, Response
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
@@ -300,7 +302,7 @@ def albums():
     if parsed is None:
         return {"available": False, "path": ALBUMS_FILE, "albums": [],
                 "counts": empty, "current": None}
-    started = _started_urls()
+    started_keys = {_url_key(u) for u in _started_urls()}
     files = scan_downloads()["files"]
     dirnames = _dir_names(files)
     disk_counts = Counter(f.get("album_set") for f in files if f.get("album_set"))
@@ -334,7 +336,7 @@ def albums():
         set_id, _ = _parse_url_ids(url)
         key = "a." + set_id if set_id else url
         seen.add(key)
-        in_logs = url in started
+        in_logs = _url_key(url) in started_keys
         if done:
             status = "done"
         elif in_logs:
@@ -373,6 +375,18 @@ def albums():
 
 
 # ---------------------------------------------------------------- tree parser
+
+def _url_key(url):
+    "Canonical key for one album URL: same host/path/query params, any param order."
+    if not url:
+        return None
+    try:
+        parts = urlsplit(url.strip())
+        return (parts.scheme.lower(), parts.netloc.lower(),
+                parts.path.rstrip("/"), tuple(sorted(parse_qsl(parts.query))))
+    except ValueError:
+        return url
+
 
 def _ts_of(line):
     m = TS_RE.match(line)
@@ -464,7 +478,7 @@ def _photo_link(fbid, set_id):
 
 
 def _album_status(a, done_urls):
-    if a["url"] in done_urls:
+    if a["url"] and _url_key(a["url"]) in done_urls:
         return "done", "completed (marked '#' in albums.txt)"
     if a["rejections"]:
         return "banned", "scraping rejection (anti-bot)"
@@ -479,7 +493,8 @@ def parse_log():
     Return (tree, spans): spans maps ("s", si) / ("s", si, ai) / ("s", si, ai, pi)
     to (start_byte, end_byte) ranges in the log file."""
     parsed_albums = _read_albums_file(ALBUMS_FILE) or []
-    done_urls = {u for u, d in parsed_albums if d}
+    # canonical keys: a '#' line matches even with reordered query params
+    done_urls = {_url_key(u) for u, d in parsed_albums if d}
     dirnames = _dir_names()
 
     sessions = []
@@ -607,7 +622,8 @@ def parse_log():
         prev_end, prev_ts = end, ts
     close_session(prev_end, prev_ts)
 
-    return {"sessions": sessions, "runs": len(sessions), "done_urls": sorted(done_urls)}, spans
+    done_list = sorted(u for u, d in parsed_albums if d)
+    return {"sessions": sessions, "runs": len(sessions), "done_urls": done_list}, spans
 
 
 _tree_cache = {"key": None, "value": None}
@@ -954,7 +970,7 @@ def albums_overview():
             e["errors"] += a["errors"]
             e["rejections"] += a["rejections"]
     out = list(agg.values())
-    done_set = set(t["done_urls"])
+    done_set = {_url_key(u) for u in t["done_urls"]}
     for e in out:
         e["retried"] = len(set(e["sessions"])) > 1
         # recompute from the aggregated counters, not from the first session
@@ -1409,12 +1425,13 @@ def summary():
     files = scan_downloads()
     _annotate_disk(t, files["files"])
     parsed = _read_albums_file(ALBUMS_FILE)
-    started = _started_urls()
+    started_keys = {_url_key(u) for u in _started_urls()}
     dirnames = _dir_names(files["files"])
     if parsed is not None:
         albums_total = len(parsed)
         albums_done = sum(1 for _, d in parsed if d)
-        albums_unfinished = sum(1 for u, d in parsed if not d and u in started)
+        albums_unfinished = sum(1 for u, d in parsed
+                                if not d and _url_key(u) in started_keys)
         albums_remaining = albums_total - albums_done - albums_unfinished
         albums_available = True
     else:
