@@ -183,17 +183,62 @@ class ApiTests(unittest.TestCase):
     def test_albums_status(self):
         data = self.client.get("/api/albums").json()
         self.assertTrue(data["available"])
+        # 3 entries in albums.txt; the log/disk album is SET_URL -> no extra
         self.assertEqual(data["counts"],
-                         {"done": 1, "incomplete": 1, "not_started": 1, "total": 3})
+                         {"done": 1, "incomplete": 1, "not_started": 1,
+                          "not_in_file": 0, "total": 3})
         self.assertEqual(data["current"], SET_URL)
         by_url = {a["url"]: a["status"] for a in data["albums"]}
         self.assertEqual(by_url["https://example.com/done"], "done")
-        self.assertEqual(by_url[SET_URL], "incomplete")
-        self.assertEqual(by_url["https://example.com/never"], "not_started")
+        self.assertEqual(by_url[SET_URL], "incomplete")   # started, not '#' -> unfinished
+        self.assertEqual(by_url["https://example.com/never"], "not_started")  # remaining
         names = {a["url"]: a.get("name") for a in data["albums"]}
         # album name = the download dir title gallery-dl created
         self.assertEqual(names[SET_URL], "Vacances 2025")
         self.assertIsNone(names["https://example.com/never"])  # no dir -> no name
+        # 3-way comparison fields
+        e = by_url and {a["url"]: a for a in data["albums"]}[SET_URL]
+        self.assertTrue(e["in_file"])
+        self.assertFalse(e["done"])
+        self.assertTrue(e["in_logs"])
+        self.assertEqual(e["on_disk"], 4)
+        self.assertEqual(e["set_id"], SET_ID)
+        self.assertEqual(e["link"],
+                         f"https://www.facebook.com/media/set/?set=a.{SET_ID}&type=3")
+
+    def test_albums_not_in_file(self):
+        # an album dir on disk but absent from albums.txt -> not_in_file entry
+        other_dir = os.path.join(DOWNLOADS_DIR, "facebook", "user42", "Other (a.777000111222333)")
+        os.makedirs(other_dir, exist_ok=True)
+        from PIL import Image as _Img
+        extra = os.path.join(other_dir, "20250506_082807_777000111222333.jpg")
+        _Img.new("RGB", (8, 8)).save(extra, "JPEG")
+        try:
+            self.client.get("/api/files", params={"refresh": 1})
+            clear_caches()
+            data = self.client.get("/api/albums").json()
+            self.assertEqual(data["counts"]["not_in_file"], 1)
+            self.assertEqual(data["counts"]["total"], 4)
+            e = [a for a in data["albums"] if a["status"] == "not_in_file"][0]
+            self.assertFalse(e["in_file"])
+            self.assertFalse(e["in_logs"])       # never started in logs
+            self.assertEqual(e["on_disk"], 1)
+            self.assertEqual(e["set_id"], "777000111222333")
+            self.assertEqual(e["name"], "Other")  # from the download dir title
+        finally:
+            os.remove(extra)
+            os.rmdir(other_dir)
+            self.client.get("/api/files", params={"refresh": 1})
+            clear_caches()
+
+    def test_session_log_span(self):
+        r = self.client.get("/api/session/0/logs").json()
+        self.assertEqual(r["total"], 7)          # L1..L7 (up to the 2nd Version line)
+        self.assertIn("Version 1.32.21", r["lines"][0])
+        self.assertIn("Starting DownloadJob", r["lines"][1])
+        r1 = self.client.get("/api/session/1/logs").json()
+        self.assertEqual(r1["total"], len(LINES) - 7)
+        self.assertEqual(self.client.get("/api/session/9/logs").status_code, 404)
 
     def test_stats_counts(self):
         data = self.client.get("/api/stats").json()

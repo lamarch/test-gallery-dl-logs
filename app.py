@@ -293,29 +293,64 @@ def _started_urls():
 
 @app.get("/api/albums")
 def albums():
+    """3-way comparison source for the Albums view: albums.txt x logs x disk.
+
+    Each entry carries: url, set_id, name, link, status (done / incomplete /
+    not_started / not_in_file), in_file, done ('#' in albums.txt), in_logs
+    (a 'Starting ...Job' line was seen), on_disk (files indexed under the
+    album's dir). Albums seen in the logs or on disk but absent from
+    albums.txt are appended with in_file=False, status="not_in_file".
+    "incomplete" = started in logs but not marked done (unfinished);
+    "not_started" = in albums.txt but never started (remaining)."""
     parsed = _read_albums_file(ALBUMS_FILE)
-    empty = {"done": 0, "incomplete": 0, "not_started": 0, "total": 0}
+    empty = {"done": 0, "incomplete": 0, "not_started": 0, "not_in_file": 0, "total": 0}
     if parsed is None:
         return {"available": False, "path": ALBUMS_FILE, "albums": [],
                 "counts": empty, "current": None}
     started = _started_urls()
     dirnames = _dir_names()
+    disk_counts = Counter(f.get("album_set") for f in scan_downloads()["files"]
+                          if f.get("album_set"))
+    t, _ = get_tree()
+    log_albums = {}
+    for s in t["sessions"]:
+        for a in s["albums"]:
+            key = "a." + a["set_id"] if a.get("set_id") else a["url"]
+            log_albums.setdefault(key, a)
     out = []
-    counts = {"done": 0, "incomplete": 0, "not_started": 0}
+    counts = {"done": 0, "incomplete": 0, "not_started": 0, "not_in_file": 0}
     current = None
+    seen = set()
     for url, done in parsed:
+        set_id, _ = _parse_url_ids(url)
+        key = "a." + set_id if set_id else url
+        seen.add(key)
+        in_logs = url in started
         if done:
             status = "done"
-        elif url in started:
+        elif in_logs:
             status = "incomplete"
         else:
             status = "not_started"
         if not done and current is None:
             current = url
-        set_id, _ = _parse_url_ids(url)
         counts[status] += 1
-        out.append({"url": url, "status": status,
+        out.append({"url": url, "set_id": set_id, "link": _album_link(url, set_id),
+                    "status": status, "in_file": True, "done": done, "in_logs": in_logs,
+                    "on_disk": disk_counts.get(key, 0),
                     "name": _album_display_name(url, set_id, dirnames)})
+    for key in sorted(set(log_albums) | set(disk_counts)):
+        if key in seen:
+            continue
+        a = log_albums.get(key)
+        set_id = a["set_id"] if a else (key[2:] if key.startswith("a.") else None)
+        counts["not_in_file"] += 1
+        out.append({"url": a["url"] if a else None, "set_id": set_id,
+                    "link": a["link"] if a else None,
+                    "status": "not_in_file", "in_file": False, "done": False,
+                    "in_logs": a is not None, "on_disk": disk_counts.get(key, 0),
+                    "name": _album_display_name(a["url"], a["set_id"], dirnames) if a
+                            else dirnames.get(key)})
     counts["total"] = len(out)
     return {"available": True, "path": ALBUMS_FILE, "albums": out,
             "counts": counts, "current": current}
@@ -752,6 +787,13 @@ def _span_lines(spans, key, offset, limit):
             lines.append(pending.decode("utf-8", "replace"))
         total += 1
     return {"lines": lines, "total": total, "offset": offset}
+
+
+@app.get("/api/session/{s}/logs")
+def session_logs(s: int, offset: int = Query(default=0, ge=0),
+                 limit: int = Query(default=2000, ge=1, le=20000)):
+    _, spans = get_tree()
+    return _span_lines(spans, ("s", s), offset, limit)
 
 
 @app.get("/api/album/{s}/{a}/logs")
