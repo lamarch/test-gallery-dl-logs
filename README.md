@@ -189,7 +189,7 @@ skip) or when the file was already there from a previous run.
 | `GET /api/stream?since=OFFSET` | SSE stream of new lines |
 | `GET /api/search?q=…&limit=N` | search the scanned region, total count + first matches |
 | `GET /api/albums` | 3-way comparison source: one entry per album with `in_file` / `done` / `in_logs` / `on_disk` / `set_id` / `link` / `name`; albums seen in logs or on disk but absent from albums.txt are appended (`status=not_in_file`); `counts`: done / incomplete (unfinished) / not_started (remaining) / not_in_file / total; `current` |
-| `GET /api/summary` | fixed 3-line banner payload: files on disk, photos detected, downloaded, global 5-state counters, albums (done/unfinished/remaining/total), last sleep + `wake_epoch`, current album (+set/name/link), errors/warnings/rejections, `last_activity`, log size/lines, `timezone` |
+| `GET /api/summary` | fixed 3-line banner payload: files on disk, photos detected, downloaded, global 5-state counters, albums (done/unfinished/remaining/total), last sleep + `wake_epoch`, current album (+set/name/link), errors/warnings/rejections, `last_activity`, log size/lines, `timezone` (also `rejection_regex`: the server-side rejection pattern, adopted by the UI so both stay in sync) |
 | `GET /api/exif_stats` | aggregated EXIF precompute results: `global` and `by_album` per-state counts (synced/mismatch/no_exif) + `scanned`/`total`/`done` progress |
 | `GET /api/stats` | counters incl. `files`, `current_album`, `current_album_set`, `current_album_files`, `last_sleep`, `last_activity`, `rejections`, `truncated` |
 | `GET /api/tree` | parsed session → album → photo tree (`runs`, `done_urls`), per node: `states` (5-state counters incl. `foreign`), `on_disk`, `max_mtime`, per-photo `state`/`dl`/`path`/`mtime`/`name_date`, album `name`/`missing_on_disk` |
@@ -203,7 +203,7 @@ skip) or when the file was already there from a previous run.
 | `GET /api/thumb?path=REL&w=160` | server-side resized JPEG thumbnail (Pillow, cached) — used by the Files tab so it does not download full-HD images; same traversal rules |
 | `GET /api/exif?path=REL` | EXIF DateTimeOriginal (Exif sub-IFD, `OffsetTimeOriginal` if present, else `DISPLAY_TZ`) vs mtime → `synced` / `mismatch` / `no_exif` + filename date + `exif_epoch` |
 | `GET /api/export` | JSON attachment: tree + albums overview + files |
-| `GET /api/status` | existence / size / mtime of the log file + `timezone` (DISPLAY_TZ) |
+| `GET /api/status` | existence / size / mtime of the log file + `timezone` (DISPLAY_TZ) + `rejection_regex` |
 | `GET /api/raw` | raw log file (download) |
 
 ## Notes

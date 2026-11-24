@@ -94,7 +94,7 @@ from app import REJECTION_RE, app  # noqa: E402
 
 def clear_caches():
     for c in (app_module._stats_cache, app_module._search_cache,
-              app_module._started_cache, app_module._tree_cache):
+              app_module._tree_cache):
         c.update(key=None, value=None)
     app_module._files_cache.update(value=None, ts=0.0)
     with app_module._exif_lock:
