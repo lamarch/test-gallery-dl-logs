@@ -147,6 +147,7 @@ select{background:#fff;border:1px solid #ced4da;color:var(--fg);border-radius:.3
 <div id="view-tree" class="view">
   <div class="controls">
     <input id="tree-q" type="search" placeholder="Filter tree (album name, set id, fbid)…">
+    <button id="tree-refresh">Refresh</button>
     <span id="tree-count" class="stat"></span>
   </div>
   <div id="tree-root"></div>
@@ -154,6 +155,7 @@ select{background:#fff;border:1px solid #ced4da;color:var(--fg);border-radius:.3
 <div id="view-albums" class="view">
   <div class="controls">
     <input id="albums-q" type="search" placeholder="Filter albums (name, set id, url)…">
+    <button id="albums-refresh">Refresh</button>
   </div>
   <div id="albums-compare"></div>
   <div id="albums-root"></div>
@@ -496,21 +498,16 @@ function updateBanner(s) {
 // ---------------------------------------------------------------- tree view (3 lines per node)
 let treeData = null, exifStats = { by_album: {}, total: 0, scanned: 0 }, treeBooted = false, treeLoading = false;
 let treeSig = null;
-function treeSignature(t, ex) {  // lightweight: only summary-level fields (no photos lists)
-  const by = (ex && ex.by_album) || {};
-  return JSON.stringify(t.sessions.map(s => [s.idx, s.start, s.end, s.photos_n,
-    s.files, s.bytes, s.sleeps, s.errors, s.rejections, s.states, s.on_disk,
-    s.max_mtime, s.albums.map(a => [a.idx, a.status, a.end, a.end_reason,
-      a.photos_n, a.files, a.bytes, a.sleeps, a.errors, a.rejections, a.states,
-      a.on_disk, a.missing_on_disk, a.max_mtime])])) + "|" + JSON.stringify(by);
+function treeSignature(t, ex) {  // only the data that is actually rendered
+  return JSON.stringify(t) + "|" + JSON.stringify(ex && ex.by_album);
 }
-// scroll preservation across live refreshes: reopened nodes load their content
+// scroll preservation across refreshes: reopened nodes load their content
 // asynchronously (photos / log spans), which grows the page AFTER the first
 // restore - so we re-apply the saved scroll when that content settles.
 let scrollRestore = null;
 function applyScrollRestore() { if (scrollRestore) scrollRestore.view.scrollTop = scrollRestore.value; }
 // content caches: reopened nodes repaint INSTANTLY from cache (no empty flash
-// on live refresh); a background fetch then updates the cache and only repaints
+// on refresh); a background fetch then updates the cache and only repaints
 // if the data actually changed.
 const photosCache = {};  // "s/a" -> { set_id, photos_n, photos: [...], painted: sig }
 const spanCache = {};    // "logs-..." -> joined raw log lines
@@ -591,23 +588,26 @@ function makeLogPane(key, loader) {
   return det;
 }
 function wireLogsBtn(container, pane) {
-  // container is the <summary> (persists across innerHTML updates) -> use
-  // delegation so the button keeps working after the summary lines change
-  container.addEventListener("click", (e) => {
-    if (!e.target.closest(".logs-btn")) return;
+  const btn = container.querySelector(".logs-btn");
+  if (btn) btn.addEventListener("click", (e) => {
     e.preventDefault();
     e.stopPropagation();
     pane.open = !pane.open;
   });
 }
-function sessionSummaryHtml(s, isLast) {
+function sessionNode(s, isLast) {
+  const det = document.createElement("details");
+  det.className = "tnode node-session";
+  det.dataset.key = "s" + s.idx;
   const dur = tsEpoch(s.end) - tsEpoch(s.start);
   const st = s.rejections ? "banned" : (isLast ? "running" : "ended");
   const stCls = s.rejections ? "banned" : (isLast ? "running" : "pending");
   const stTitle = s.rejections ? "Scraping rejection(s) detected in this session"
     : (isLast ? "Most recent session (a container restart starts a new session)"
               : "Session ended (a newer 'Version' line follows)");
-  return '<div class="n-l1">💼 <b>Session #' + s.idx + "</b>" +
+  const sum = document.createElement("summary");
+  sum.innerHTML =
+    '<div class="n-l1">💼 <b>Session #' + s.idx + "</b>" +
     ' <span class="stat">' + esc(fmtTs(s.start)) + " → " + esc(fmtTs(s.end)) +
     (isFinite(dur) ? " · ⏱ " + fmtDur(dur / 1000) : "") + "</span> " +
     badge(st, stCls, stTitle) + "</div>" +
@@ -619,54 +619,27 @@ function sessionSummaryHtml(s, isLast) {
     (s.errors ? " · ✖ <b>" + s.errors + "</b> errors" : "") +
     (s.rejections ? " · 🚫 <b>" + s.rejections + "</b> rejections" : "") +
     " · 🖼 <b>" + s.photos_n + "</b> photos</span></div>";
-}
-function sessionSigOf(s, isLast) {
-  return JSON.stringify([isLast, s.start, s.end, s.photos_n, s.files, s.bytes,
-    s.sleeps, s.errors, s.rejections, s.on_disk, s.max_mtime, s.states]);
-}
-function nodeByKey(parent, key) {
-  return parent.querySelector('details.tnode[data-key="' + qsel(key) + '"]');
-}
-function sessionNode(root, s, isLast) {
-  // keyed reconcile: reuse the existing <details> across 5 s refreshes so
-  // expanded albums + photos + log panes survive; repaint only the summary
-  const key = "s" + s.idx;
-  let det = nodeByKey(root, key);
-  if (!det) {
-    det = document.createElement("details");
-    det.className = "tnode node-session";
-    det.dataset.key = key;
-    det.dataset.sig = "";
-    const sum = document.createElement("summary");
-    det.appendChild(sum);
-    const box = document.createElement("div");
-    box.className = "tree-indent";
-    const pane = makeLogPane("logs-s" + s.idx, async () =>
-      (await (await fetch("/api/session/" + s.idx + "/logs?limit=20000")).json()).lines);
-    wireLogsBtn(sum, pane);
-    box.appendChild(pane);
-    det.appendChild(box);
-    if (!treeBooted && isLast) det.open = true;  // auto-expand only the most recent session
-  }
-  const sig = sessionSigOf(s, isLast);
-  if (det.dataset.sig !== sig) {
-    det.dataset.sig = sig;
-    det.firstElementChild.innerHTML = sessionSummaryHtml(s, isLast);
-  }
-  const box = det.lastElementChild;
-  reconcileAlbums(box, box.firstElementChild, s, isLast);
+  det.appendChild(sum);
+  const box = document.createElement("div");
+  box.className = "tree-indent";
+  const pane = makeLogPane("logs-s" + s.idx, async () =>
+    (await (await fetch("/api/session/" + s.idx + "/logs?limit=20000")).json()).lines);
+  wireLogsBtn(sum, pane);
+  box.appendChild(pane);
+  for (let i = 0; i < s.albums.length; i++)
+    box.appendChild(albumNode(s, s.albums[i], isLast && i === s.albums.length - 1));
+  det.appendChild(box);
+  if (!treeBooted && isLast) det.open = true;  // auto-expand only the most recent session
   return det;
 }
-function reconcileAlbums(box, pane, s, isLast) {
-  const curKeys = [...box.children].filter(el => el.dataset.key).map(el => el.dataset.key);
-  const next = s.albums.map((a, i) => albumNode(box, s, a, isLast && i === s.albums.length - 1));
-  const newKeys = next.map(el => el.dataset.key);
-  if (JSON.stringify(curKeys) !== JSON.stringify(newKeys))
-    box.replaceChildren(pane, ...next);
-}
-function albumSummaryHtml(a) {
+function albumNode(s, a, auto) {
+  const det = document.createElement("details");
+  det.className = "tnode node-album";
+  det.dataset.key = "s" + s.idx + "/a" + a.idx;
   const dur = tsEpoch(a.end) - tsEpoch(a.start);
-  return '<div class="n-l1">📁 <b>' + esc(a.name || ("album #" + a.idx)) + "</b>" +
+  const sum = document.createElement("summary");
+  sum.innerHTML =
+    '<div class="n-l1">📁 <b>' + esc(a.name || ("album #" + a.idx)) + "</b>" +
     (a.set_id ? ' <span class="stat">(a.' + esc(a.set_id) + ")</span>" : "") +
     ' <span class="stat">' + esc(fmtTs(a.start)) + " → " + esc(fmtTs(a.end)) +
     (isFinite(dur) ? " · ⏱ " + fmtDur(dur / 1000) : "") + "</span> " +
@@ -675,58 +648,35 @@ function albumSummaryHtml(a) {
     ' <span class="cnt" title="Cumulative sleep time for this album">💤 <b>' + a.sleeps.toFixed(1) + 's</b> sleep</span>' +
     ' <span class="cnt" title="Bytes downloaded (CDN payloads) for this album">💾 <b>' + humanSize(a.bytes) + "</b></span>" +
     (a.link ? ' <a class="cnt" href="' + esc(a.link) + '" target="_blank" rel="noopener" title="Open this album in Facebook (browser link)">🔗 FB</a>' : "") +
-    (a.set_id ? ' <a class="cnt" href="#album=' + esc(a.set_id) + '" title="Open this album in the Albums view">📂 #album</a>' : "") +
-    ' <button class="logs-btn">📄 logs</button></div>' +
+    (a.set_id ? ' <a class="cnt" href="#album=' + esc(a.set_id) + '" title="Open this album in the Albums view">🗂 #album</a>' : "") +
+    ' <button class="logs-btn">📜 logs</button></div>' +
     '<div class="n-l3"><span class="stat">last mtime: ' + (a.max_mtime ? esc(fmtEpoch(a.max_mtime)) : "—") +
     " · exif: " + exifCountsHtml("a." + a.set_id) +
     " · 🖼 <b>" + a.photos_n + "</b> photos</span></div>";
-}
-function albumSigOf(a) {
-  return JSON.stringify([a.status, a.end, a.end_reason, a.photos_n, a.files, a.bytes,
-    a.sleeps, a.errors, a.rejections, a.states, a.on_disk, a.missing_on_disk,
-    a.max_mtime, (exifStats.by_album || {})["a." + a.set_id] || null]);
-}
-function albumNode(box, s, a, auto) {
-  const key = "s" + s.idx + "/a" + a.idx;
-  let det = nodeByKey(box, key);
-  if (!det) {
-    det = document.createElement("details");
-    det.className = "tnode node-album";
-    det.dataset.key = key;
-    det.dataset.sig = "";
-    const sum = document.createElement("summary");
-    det.appendChild(sum);
-    const inner = document.createElement("div");
-    inner.className = "tree-indent";
-    const pane = makeLogPane("logs-s" + s.idx + "/a" + a.idx, async () =>
-      (await (await fetch("/api/album/" + s.idx + "/" + a.idx + "/logs?limit=20000")).json()).lines);
-    wireLogsBtn(sum, pane);
-    inner.appendChild(pane);
-    const photosBox = document.createElement("div");
-    photosBox.className = "photos";
-    inner.appendChild(photosBox);
-    det.appendChild(inner);
-    let loaded = false;
-    det.addEventListener("toggle", () => {
-      if (!det.open || loaded) return;
-      loaded = true;
-      // expanding an album also expands its photos; repaint instantly from cache
-      // so the 5 s live refresh does not empty the node, then refresh in background
-      if (photosCache[s.idx + "/" + a.idx]) paintPhotos(s.idx, a.idx, photosBox);
-      loadPhotos(s.idx, a.idx, photosBox, 0);
-    });
-    if (auto && !treeBooted) det.open = true;  // auto-expand only the most recent album
-  }
-  const sig = albumSigOf(a);
-  if (det.dataset.sig !== sig) {
-    det.dataset.sig = sig;
-    const sum = det.firstElementChild;
-    sum.innerHTML = albumSummaryHtml(a);
-    if (a.set_id) sum.querySelector(".n-l1").appendChild(copyBtn("a." + a.set_id));
-  }
+  det.appendChild(sum);
+  if (a.set_id) sum.querySelector(".n-l1").appendChild(copyBtn("a." + a.set_id));
+  const box = document.createElement("div");
+  box.className = "tree-indent";
+  const pane = makeLogPane("logs-s" + s.idx + "/a" + a.idx, async () =>
+    (await (await fetch("/api/album/" + s.idx + "/" + a.idx + "/logs?limit=20000")).json()).lines);
+  wireLogsBtn(sum, pane);
+  box.appendChild(pane);
+  const photosBox = document.createElement("div");
+  photosBox.className = "photos";
+  box.appendChild(photosBox);
+  det.appendChild(box);
+  let loaded = false;
+  det.addEventListener("toggle", () => {
+    if (!det.open || loaded) return;
+    loaded = true;
+    // expanding an album also expands its photos; repaint instantly from cache
+    // so a refresh does not empty the node, then refresh in background
+    if (photosCache[s.idx + "/" + a.idx]) paintPhotos(s.idx, a.idx, photosBox);
+    loadPhotos(s.idx, a.idx, photosBox, 0);
+  });
+  if (auto && !treeBooted) det.open = true;  // auto-expand only the most recent album
   return det;
 }
-
 function photoRow(s, a, p, setId) {
   const row = document.createElement("div");
   row.className = "tnode photo";
@@ -817,17 +767,17 @@ function renderTree() {
   const t = treeData;
   if (!t) return;
   const view = $("view-tree"), root = $("tree-root");
+  // preserve expanded nodes + scroll across refreshes
+  const openKeys = new Set([...root.querySelectorAll("details.tnode[data-key]")]
+    .filter(d => d.open).map(d => d.dataset.key));
   const scroll = view.scrollTop;
-  // keyed reconcile: existing session nodes are reused in place (their
-  // expanded albums, photos and log panes survive the 5 s refresh);
-  // replaceChildren only fires when the key sequence itself changed
   const lastS = t.sessions[t.sessions.length - 1];
-  const nodes = t.sessions.map(s => sessionNode(root, s, s === lastS));
-  const curKeys = [...root.children].map(el => el.dataset.key);
-  const newKeys = nodes.map(el => el.dataset.key);
-  if (JSON.stringify(curKeys) !== JSON.stringify(newKeys))
-    root.replaceChildren(...nodes);
+  const frag = document.createDocumentFragment();
+  for (const s of t.sessions) frag.appendChild(sessionNode(s, s === lastS));
+  root.replaceChildren(frag);  // single swap: no intermediate empty-tree flash
   applyTreeFilter($("tree-q").value.trim().toLowerCase());
+  for (const d of root.querySelectorAll("details.tnode[data-key]"))  // parents come first
+    if (openKeys.has(d.dataset.key)) d.open = true;
   keepScroll(view, scroll);
   treeBooted = true;
   const albums = t.sessions.reduce((n, s) => n + s.albums.length, 0);
@@ -839,6 +789,7 @@ function applyTreeFilter(q) {
     el.classList.toggle("hidden", !!q && !el.textContent.toLowerCase().includes(q));
 }
 $("tree-q").addEventListener("input", () => applyTreeFilter($("tree-q").value.trim().toLowerCase()));
+$("tree-refresh").addEventListener("click", () => refreshTree());
 
 // ---------------------------------------------------------------- albums view (3-way comparison + cards)
 let overviewData = null, compareData = null, overviewLoading = false, overviewSig = null;
@@ -900,7 +851,6 @@ function renderCompare(cmp) {
 function albumCard(a) {
   const card = document.createElement("div");
   card.className = "card acmp";
-  card.dataset.key = "ov-" + (a.set_id || encodeURIComponent(a.url));
   card.id = "album-" + (a.set_id || encodeURIComponent(a.url));
   card.innerHTML = "<h3>📁 " + (a.name ? "<b>" + esc(a.name) + "</b> — " : "") +
     (a.link ? '<a href="' + esc(a.link) + '" target="_blank" rel="noopener">' + esc(trunc(a.url, 70)) + "</a>" : esc(trunc(a.url, 70))) +
@@ -947,34 +897,24 @@ function albumCard(a) {
 }
 function renderOverview() {
   const view = $("view-albums");
+  const openKeys = new Set([...view.querySelectorAll("details.tnode[data-key]")]
+    .filter(d => d.open).map(d => d.dataset.key));
   const scroll = view.scrollTop;
   renderCompare(compareData);
   const root = $("albums-root");
-  // keyed reconcile: reuse unchanged cards (their expanded session details +
-  // photos survive), rebuild only the ones whose data actually changed
-  let next = [];
+  const frag = document.createDocumentFragment();
   if (overviewData && overviewData.albums.length) {
-    for (const a of overviewData.albums) {
-      const key = "ov-" + (a.set_id || encodeURIComponent(a.url));
-      const sig = JSON.stringify(a);
-      let el = root.querySelector('.card[data-key="' + qsel(key) + '"]');
-      if (!el || el.dataset.sig !== sig) {
-        el = albumCard(a);
-        el.dataset.sig = sig;
-      }
-      next.push(el);
-    }
+    for (const a of overviewData.albums) frag.appendChild(albumCard(a));
   } else {
     const p = document.createElement("p");
     p.className = "stat";
     p.textContent = "no albums parsed yet";
-    next.push(p);
+    frag.appendChild(p);
   }
-  const curKeys = [...root.children].map(el => el.dataset.key || el.className);
-  const newKeys = next.map(el => el.dataset.key || el.className);
-  if (JSON.stringify(curKeys) !== JSON.stringify(newKeys))
-    root.replaceChildren(...next);
+  root.replaceChildren(frag);  // single swap: no intermediate empty-list flash
   applyAlbumsFilter($("albums-q").value.trim().toLowerCase());
+  for (const d of view.querySelectorAll("details.tnode[data-key]"))
+    if (openKeys.has(d.dataset.key)) d.open = true;
   keepScroll(view, scroll);
   if (pendingAlbum) {
     const k = pendingAlbum;
@@ -987,6 +927,7 @@ function applyAlbumsFilter(q) {
     el.classList.toggle("hidden", !!q && !el.textContent.toLowerCase().includes(q));
 }
 $("albums-q").addEventListener("input", () => applyAlbumsFilter($("albums-q").value.trim().toLowerCase()));
+$("albums-refresh").addEventListener("click", () => refreshOverview());
 
 // ---------------------------------------------------------------- files view
 let filesData = null;
@@ -1153,8 +1094,8 @@ async function poll() {
       rejBanner.style.display = "none";
       if (onlyRej) { onlyRej = false; rejBanner.classList.remove("active"); refilter(); }
     }
-    if (tab === "tree") refreshTree();       // live refresh, expanded nodes + scroll preserved
-    else if (tab === "albums") refreshOverview();
+    // tree/albums do NOT auto-refresh: they reload when the tab is opened or
+    // via their Refresh button (same pattern as the Files tab)
   } catch (e) {}
   setTimeout(poll, 5000);
 }
