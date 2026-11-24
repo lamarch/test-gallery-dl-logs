@@ -844,6 +844,71 @@ class FreshnessAndDoneFallbackTests(unittest.TestCase):
         self.assertEqual(sm["total"], 1)
 
 
+class OpsLoggingTests(unittest.TestCase):
+    """Operational logging (docker logs): zero noise on a healthy run, one
+    contextual warning per degraded state, recovery logs when it heals."""
+
+    def setUp(self):
+        from fastapi.testclient import TestClient
+        self.client = TestClient(app)
+
+    def test_healthy_run_is_silent(self):
+        with self.assertNoLogs("fb-dl", level="WARNING"):
+            for url in ("/api/tree", "/api/albums", "/api/albums_overview",
+                        "/api/summary", "/api/stats", "/api/status", "/api/files",
+                        "/api/logs", "/api/search?q=facebook",
+                        "/api/album/0/0", "/api/exif_stats", "/api/export"):
+                self.client.get(url)
+
+    def test_missing_log_warns_once_then_recovers(self):
+        import app as app_module
+        orig = app_module.LOG_FILE
+        app_module.LOG_FILE = os.path.join(BASE, "does-not-exist.log")
+        try:
+            clear_caches()
+            with self.assertLogs("fb-dl", level="WARNING") as lg:
+                r = self.client.get("/api/status").json()
+                self.assertFalse(r["exists"])
+            self.assertTrue(any("log file" in l for l in lg.output))
+            self.assertEqual(len(lg.output), 1)   # deduped across endpoints
+            # deduped across the whole surface: a second endpoint stays quiet
+            self.client.get("/api/logs")
+        finally:
+            app_module.LOG_FILE = orig
+            clear_caches()
+            # recovery: INFO, not WARNING, once the log is back
+            with self.assertLogs("fb-dl", level="INFO") as lg:
+                self.client.get("/api/status").json()
+            self.assertTrue(any("readable again" in l for l in lg.output))
+
+    def test_missing_albums_file_warns(self):
+        import app as app_module
+        orig = app_module.ALBUMS_FILE
+        app_module.ALBUMS_FILE = os.path.join(BASE, "does-not-exist.txt")
+        try:
+            clear_caches()
+            with self.assertLogs("fb-dl", level="WARNING") as lg:
+                r = self.client.get("/api/albums").json()
+                self.assertFalse(r["available"])
+            self.assertTrue(any("albums file" in l for l in lg.output))
+        finally:
+            app_module.ALBUMS_FILE = orig
+            clear_caches()
+
+    def test_undecodable_thumb_warns(self):
+        bad = os.path.join(ALBUM_DIR, "20260101_000000_777888999000111.jpg")
+        with open(bad, "wb") as f:
+            f.write(b"not an image at all")
+        rel = os.path.relpath(bad, DOWNLOADS_DIR)
+        try:
+            with self.assertLogs("fb-dl", level="WARNING") as lg:
+                r = self.client.get("/api/thumb", params={"path": rel, "w": 64})
+            self.assertEqual(r.status_code, 422)
+            self.assertTrue(any("decodable" in l for l in lg.output))
+        finally:
+            os.remove(bad)
+
+
 class FilesApiTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):

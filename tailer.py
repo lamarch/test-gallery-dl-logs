@@ -1,6 +1,9 @@
+import logging
 import os
 
 DEFAULT_WINDOW = 4 * 1024 * 1024
+
+LOG = logging.getLogger("fb-dl.tailer")
 
 
 def read_tail(path, max_lines=500, window=DEFAULT_WINDOW):
@@ -138,17 +141,33 @@ class Follower:
         self.pos = offset
         self.pending = ""
         self.ino = None
+        self._gone = False
         try:
             self.ino = os.stat(self.path).st_ino
-        except OSError:
-            pass
+        except OSError as e:
+            self._warn_gone(e)
+
+    def _warn_gone(self, e):
+        """Warn once while the log file is unreadable (deduped per Follower)."""
+        if not self._gone:
+            self._gone = True
+            LOG.warning("live tail: log file not readable, stream paused: %s (%s)",
+                        self.path, e)
+
+    def _warn_back(self):
+        if self._gone:
+            self._gone = False
+            LOG.warning("live tail: log file readable again, stream resumed: %s",
+                        self.path)
 
     def poll(self):
         """Return the list of complete lines appended since the last call."""
         try:
             st = os.stat(self.path)
-        except OSError:
+        except OSError as e:
+            self._warn_gone(e)
             return []
+        self._warn_back()
         # rotation: new inode (rename) or shrinking file (copytruncate)
         if st.st_ino != self.ino or st.st_size < self.pos:
             self.pos = 0
@@ -156,9 +175,13 @@ class Follower:
             self.ino = st.st_ino
         if st.st_size <= self.pos:
             return []
-        with open(self.path, "rb") as f:
-            f.seek(self.pos)
-            chunk = f.read()
+        try:
+            with open(self.path, "rb") as f:
+                f.seek(self.pos)
+                chunk = f.read()
+        except OSError as e:
+            self._warn_gone(e)
+            return []
         self.pos += len(chunk)
         text = self.pending + chunk.decode("utf-8", "replace")
         parts = text.split("\n")
