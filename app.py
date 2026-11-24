@@ -384,10 +384,25 @@ def albums():
             disk_mtimes[k] = max(disk_mtimes.get(k, 0), f.get("mtime") or 0)
     t, _ = get_tree()
     log_albums = {}
+    log_urls_by_sid = {}
     for s in t["sessions"]:
         for a in s["albums"]:
             key = "a." + a["set_id"] if a.get("set_id") else a["url"]
             log_albums.setdefault(key, []).append(a)
+            if a.get("set_id"):
+                log_urls_by_sid.setdefault(a["set_id"], set()).add(a["url"])
+    # duplicated album ids: entries in albums.txt sharing a set id, distinct
+    # on-disk directories for one set, distinct started URLs for one set
+    file_sids = Counter()
+    for url, _ in parsed:
+        sid = _parse_url_ids(url)[0]
+        if sid:
+            file_sids[sid] += 1
+    disk_dirs = {}
+    for f in files:
+        if f.get("album_set"):
+            disk_dirs.setdefault(f["album_set"], set()).add(
+                os.path.dirname(f["path"]))
 
     def _timing(key):
         """(total_duration_s, last_activity_epoch) for one album key: sum of
@@ -422,6 +437,9 @@ def albums():
         out.append({"url": url, "set_id": set_id, "link": _album_link(url, set_id),
                     "status": status, "in_file": True, "done": done, "in_logs": in_logs,
                     "on_disk": disk_counts.get(key, 0),
+                    "file_dup": file_sids.get(set_id, 1),
+                    "disk_dup": len(disk_dirs.get(key, ())) or None,
+                    "log_url_dup": (len(log_urls_by_sid.get(set_id, ()))) or None,
                     "total_duration_s": duration,
                     "last_activity": last,
                     "name": _album_display_name(url, set_id, dirnames)})
@@ -437,11 +455,22 @@ def albums():
                     "link": a["link"] if a else None,
                     "status": "not_in_file", "in_file": False, "done": False,
                     "in_logs": a is not None, "on_disk": disk_counts.get(key, 0),
+                    "file_dup": file_sids.get(set_id, 1),
+                    "disk_dup": len(disk_dirs.get(key, ())) or None,
+                    "log_url_dup": (len(log_urls_by_sid.get(set_id, ()))) or None,
                     "total_duration_s": duration,
                     "last_activity": last,
                     "name": _album_display_name(a["url"], a["set_id"], dirnames) if a
                             else dirnames.get(key)})
     counts["total"] = len(out)
+    dup_sids = set()
+    for e in out:
+        if not e.get("set_id"):
+            continue
+        n = max(e.get("file_dup") or 1, e.get("disk_dup") or 1, e.get("log_url_dup") or 1)
+        if n > 1:
+            dup_sids.add(e["set_id"])
+    counts["dup_album_ids"] = len(dup_sids)
     return {"available": True, "path": ALBUMS_FILE, "albums": out,
             "counts": counts, "current": current}
 
