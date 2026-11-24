@@ -83,10 +83,12 @@ a.cnt{text-decoration:none}
 .view .controls{position:sticky;top:0;z-index:20;background:var(--panel);
   box-shadow:0 1px 2px rgba(16,24,40,.06)}
   .node-session>summary{position:sticky;z-index:15;background:var(--panel);box-shadow:0 1px 0 var(--border)}
-  .card>h3{position:sticky;z-index:15;margin:0;background:var(--panel);box-shadow:0 1px 0 var(--border)}
+  .card>h3{position:sticky;z-index:15;margin:-12px -16px 0;padding:12px 16px;
+    background:var(--panel);box-shadow:0 1px 0 var(--border);
+    border-radius:.5rem .5rem 0 0}
 small.stat{color:var(--muted);font-size:.82em}
   .node-album>summary{position:sticky;z-index:14;background:var(--panel);box-shadow:0 1px 0 var(--border)}
-  .card details.tnode>summary{position:sticky;z-index:14;background:var(--panel);box-shadow:0 1px 0 var(--border)}
+  
 .photo:hover{background:#f1f3f5}
 .copy-btn{padding:0 6px;font-size:11px;line-height:1.5;margin-left:2px}
 .logs-btn{font-size:11px;padding:1px 8px}
@@ -861,7 +863,7 @@ function stackSticky(viewId) {
     const h3 = card.querySelector(":scope > h3");
     if (!h3) return;
     h3.style.top = ctlH + "px";
-    card.querySelectorAll("details.tnode > summary").forEach((sum) => {
+    card.querySelectorAll("details.node-album > summary").forEach((sum) => {
       sum.style.top = (ctlH + h3.offsetHeight) + "px";
     });
   });
@@ -982,40 +984,19 @@ function albumCard(a) {
     ((a.first_mtime || a.max_mtime) ? esc(fmtEpoch(a.first_mtime || a.max_mtime)) : "—") + "</span>" +
     (a.vanity ? " <span class='stat' title='vanity id'>vanity " + esc(a.vanity) + "</span>" : "") +
     (exifCountsHtml(a.set_id ? "a." + a.set_id : "") ? " exif " + exifCountsHtml(a.set_id ? "a." + a.set_id : "") : "") +
-    ' <button class="logs-btn">📄 logs</button></div>';
+    '</div>';
   if (a.set_id) card.querySelector("h3 .stat").after(copyBtn(a.set_id));  // next to the set id
-  if (a.session_details && a.session_details.length) {
-    const sd = a.session_details[a.session_details.length - 1];
-    const pane = makeLogPane("logs-s" + sd.session + "/a" + sd.album_idx, async () =>
-      (await (await fetch("/api/album/" + sd.session + "/" + sd.album_idx + "/logs?limit=20000")).json()).lines);
-    wireLogsBtn(card.querySelector(".n-l3"), pane);  // the card's logs button (line 3)
-    card.appendChild(pane);
-  }
+  // per-session rows: THE SAME albumNode renderer as the tree view - identical
+  // layout, log pane, photo opening and sticky behavior; one code path, so
+  // fixes apply to both pages at once
   for (const sd of (a.session_details || [])) {
-    const det = document.createElement("details");
-    det.className = "tnode";
-    det.dataset.key = "ov-" + (a.set_id || "x") + "-s" + sd.session;
-    const sum = document.createElement("summary");
-    const sdDur = tsEpoch(sd.end) - tsEpoch(sd.start);
-    sum.innerHTML = "💼 Session <b>#" + sd.session + "</b> · album " +
-      esc(fmtTs(sd.start)) + " → " + esc(fmtTs(sd.end)) +
-      (isFinite(sdDur) ? " · ⏱ " + fmtDur(sdDur / 1000) : "") + " " + statusBadgeOf(sd.status, sd.end_reason) +
-      " " + countersLine(sd.photos_n, sd.states) +
-      ' <span class="cnt" title="Bytes downloaded (CDN payloads)">💾 ' + humanSize(sd.bytes) + "</span>" +
-      (sd.sleeps ? ' <span class="cnt" title="Cumulative sleep time">💤 ' + sd.sleeps.toFixed(1) + "s</span>" : "") +
-      (sd.errors ? ' <span class="cnt">✖ ' + sd.errors + "</span>" : "") + (sd.rejections ? ' <span class="cnt">🚫 ' + sd.rejections + "</span>" : "");
-    det.appendChild(sum);
-    const box = document.createElement("div");
-    box.className = "tree-indent";
-    det.appendChild(box);
-    let loaded = false;
-    det.addEventListener("toggle", () => {
-      if (!det.open || loaded) return;
-      loaded = true;
-      if (photosCache[sd.session + "/" + sd.album_idx]) paintPhotos(sd.session, sd.album_idx, box);
-      loadPhotos(sd.session, sd.album_idx, box, 0);
+    const na = Object.assign({}, sd, {
+      idx: sd.album_idx,
+      set_id: a.set_id, name: a.name, link: a.link, vanity: a.vanity,
+      retried: a.retried, on_disk_size: a.on_disk_size,
+      first_mtime: a.first_mtime, max_mtime: a.max_mtime,
     });
-    card.appendChild(det);
+    card.appendChild(albumNode({ idx: sd.session }, na, false));
   }
   return card;
 }
