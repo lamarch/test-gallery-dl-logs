@@ -619,6 +619,17 @@ function chipRerender() {
   if (tab === "tree") renderTree();
   else if (tab === "albums") renderOverview();
 }
+// the chevron is a button inside a <summary>: browsers do not fold on
+// interactive descendants, so it toggles the details itself (every view)
+document.addEventListener("click", (e) => {
+  const b = e.target.closest("button.chev");
+  if (b) {
+    e.preventDefault();
+    e.stopPropagation();
+    const det = b.closest("details");
+    if (det) det.open = !det.open;
+  }
+});
 document.addEventListener("click", (e) => {
   const c = e.target.closest(".cnt[data-chip]");
   if (c) {
