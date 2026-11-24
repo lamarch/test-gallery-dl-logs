@@ -768,6 +768,82 @@ class AlbumDoneByReorderedQueryTests(unittest.TestCase):
         self.assertEqual(sm["unfinished"], 0)
 
 
+class FreshnessAndDoneFallbackTests(unittest.TestCase):
+    """Three robustness guarantees: (1) editing albums.txt (e.g. the download
+    script writing '#') invalidates the tree cache even when the log is
+    unchanged, (2) '#' detection falls back to the album's set id when host/
+    scheme/extra params differ from the logged URL, (3) explicit tree
+    renders re-scan the disk so files written since the last call no longer
+    wait out FILES_CACHE_TTL."""
+
+    def setUp(self):
+        from fastapi.testclient import TestClient
+        self.client = TestClient(app)
+        self._orig_log = open(LOG_FILE, encoding="utf-8").read()
+        self._orig_albums = open(ALBUMS_FILE, encoding="utf-8").read()
+
+    def tearDown(self):
+        with open(LOG_FILE, "w", encoding="utf-8") as f:
+            f.write(self._orig_log)
+        with open(ALBUMS_FILE, "w", encoding="utf-8") as f:
+            f.write(self._orig_albums)
+        clear_caches()
+
+    def _write_log_started(self, url):
+        lines = [
+            "[2026-12-03 10:00:00] [gallery-dl][debug] Version 1.32.21",
+            "[2026-12-03 10:00:01] [gallery-dl][debug] Starting DownloadJob for '" + url + "'",
+        ]
+        with open(LOG_FILE, "w", encoding="utf-8") as f:
+            f.write("\n".join(lines) + "\n")
+
+    def test_albums_txt_edit_invalidates_tree_cache(self):
+        self._write_log_started(SET_URL)
+        with open(ALBUMS_FILE, "w", encoding="utf-8") as f:
+            f.write(SET_URL + "\n")          # not done yet
+        self.assertEqual(self.client.get("/api/tree").json()["sessions"][0]
+                         ["albums"][0]["status"], "incomplete")
+        # the download script marks it done; the LOG is not touched
+        with open(ALBUMS_FILE, "w", encoding="utf-8") as f:
+            f.write("# " + SET_URL + "\n")
+        self.assertEqual(self.client.get("/api/tree").json()["sessions"][0]
+                         ["albums"][0]["status"], "done")
+
+    def test_done_matches_by_set_id_despite_url_variants(self):
+        logged = (f"https://www.facebook.com/photo/?fbid=1&set=a.{SET_ID}"
+                  "&vanity=user42&ref=page_internal")
+        marked = f"http://m.facebook.com/photo/?fbid=1&set=a.{SET_ID}"
+        self._write_log_started(logged)
+        with open(ALBUMS_FILE, "w", encoding="utf-8") as f:
+            f.write("# " + marked + "\n")
+        t = self.client.get("/api/tree").json()
+        self.assertEqual(t["sessions"][0]["albums"][0]["status"], "done")
+        ov = self.client.get("/api/albums_overview").json()
+        self.assertEqual(ov["albums"][0]["status"], "done")
+
+    def test_tree_render_uses_fresh_disk_scan(self):
+        t = self.client.get("/api/tree").json()
+        before = t["sessions"][0]["albums"][0]["states"].get("foreign", 0)
+        new = os.path.join(ALBUM_DIR, "20260101_000000_111222333444555.jpg")
+        from PIL import Image
+        Image.new("RGB", (4, 4), (7, 7, 7)).save(new, "JPEG")
+        try:
+            t2 = self.client.get("/api/tree").json()
+            after = t2["sessions"][0]["albums"][0]["states"].get("foreign", 0)
+            self.assertEqual(after, before + 1)   # no TTL wait, no cache clear
+        finally:
+            os.remove(new)
+
+    def test_non_url_comment_entry_warns(self):
+        with open(ALBUMS_FILE, "w", encoding="utf-8") as f:
+            f.write("# that album is finished\n" + SET_URL + "\n")
+        with self.assertLogs("fb-dl", level="WARNING"):
+            self.client.get("/api/albums")
+        # the comment line is not treated as a done album URL
+        sm = self.client.get("/api/summary").json()["albums"]
+        self.assertEqual(sm["total"], 1)
+
+
 class FilesApiTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
