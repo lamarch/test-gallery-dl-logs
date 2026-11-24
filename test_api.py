@@ -389,6 +389,8 @@ class TreeApiTests(unittest.TestCase):
         self.assertEqual(a1["photos_n"], 3)
         # the rejection was recovered (the photo file is on disk) -> not banned
         self.assertEqual(a1["status"], "error")
+        self.assertTrue(a1t.get("running"))        # last album of the last session
+        self.assertFalse(a0.get("running"))
         self.assertEqual(a1["rejections"], 1)
         self.assertEqual(a1["errors"], 2)
         self.assertEqual(a1["photos"][0]["status"], "failed")
@@ -516,8 +518,11 @@ class TreeApiTests(unittest.TestCase):
         # recovered (photo downloaded right after / on disk) -> not banned
         self.assertEqual(a["status"], "error")
         self.assertEqual(a["rejections_unresolved"], 0)
+        self.assertTrue(a["running"])              # its last session's album
         # per-session details: one entry per session, with album_idx + photos
         sds = {d["session"]: d for d in a["session_details"]}
+        self.assertTrue(sds[1]["running"])         # that session detail row
+        self.assertFalse(sds[0]["running"])
         self.assertEqual(sorted(sds), [0, 1])
         self.assertEqual(sds[0]["album_idx"], 0)
         self.assertEqual(sds[0]["photos_n"], 1)

@@ -95,11 +95,14 @@ fbid). Each node (session / album / photo) renders 3 lines:
 - **Line 1**: icon + name (album names link to the album's card via
   `#album=<set_id>`) + status badge with a tooltip (`done` = `#` in albums.txt) +
   `facebook` link + set id (number only) + **copy-ID button** + start -> end +
-  **duration** in small type. Photo rows: thumbnail on the left, the 3 info lines
+  **duration** in small type. A **running** badge marks the album the scraper is
+  (as far as the log shows) currently working on - on the tree album, the album
+  card header and the card's session row. Photo rows: thumbnail on the left, the 3 info lines
   beside it, the **filename on line 2**; photo line 2 also keeps the FB link and the
   `#file=<path>` link (opens the Files tab filtered on it).
 - **Line 2**: the count line: **Detected** (photo pages in logs) then the counters
-  **On-disk / Downloaded / Interrupted / Missing / Already / Rejected / Foreign** —
+  **On-disk / Downloaded / Interrupted / Missing / Already / Rejected / Foreign**
+  (all chips always shown, zero counts included) —
   "On-disk" is the state called `full` in the API, "Downloaded" counts CDN payloads
   seen in logs (on-disk + missing; already-existing files don't count), "Rejected"
   marks photos that hit an anti-bot rejection (kept even if a later try succeeded) —

@@ -750,6 +750,9 @@ def _annotate_disk(t, files=None):
                 s["rejections_unresolved"] += a["rejections_unresolved"]
             for k, v in states.items():
                 s["states"][k] = s["states"].get(k, 0) + v
+    if t["sessions"] and t["sessions"][-1]["albums"]:
+        # the album the scraper is (as far as the log shows) working on
+        t["sessions"][-1]["albums"][-1]["running"] = True
 
 
 @app.get("/api/tree")
@@ -903,6 +906,7 @@ def albums_overview():
     agg = {}
     for s in t["sessions"]:
         for a in s["albums"]:
+            running = s is t["sessions"][-1] and a is s["albums"][-1]
             key = a["set_id"] or a["url"]
             e = agg.setdefault(key, {
                 "key": key, "url": a["url"], "set_id": a["set_id"], "vanity": a["vanity"],
@@ -924,8 +928,9 @@ def albums_overview():
                 if k == "foreign":
                     continue  # recomputed once per album set below
                 e["states"][k] = e["states"].get(k, 0) + v
+            e["running"] = e.get("running", False) or running
             e["session_details"].append({
-                "session": s["idx"], "album_idx": a["idx"],
+                "session": s["idx"], "album_idx": a["idx"], "running": running,
                 "session_start": s["start"], "start": a["start"], "end": a["end"],
                 "photos_n": a["photos_n"], "files": a["files"], "bytes": a["bytes"],
                 "states": a.get("states", {}),
