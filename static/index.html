@@ -359,7 +359,10 @@ async function loadEarlier() {
     const data = await r.json();
     firstOffset = data.start_offset;
     hasMore = data.has_more;
+    const v = $("view-log");
+    const h0 = v.scrollHeight, s0 = v.scrollTop;
     prependLines(data.lines);
+    v.scrollTop = s0 + (v.scrollHeight - h0);  // prepending must not move the viewport
   } catch (e) {}
   updateEarlierBtn();
 }
@@ -492,6 +495,19 @@ function updateBanner(s) {
 
 // ---------------------------------------------------------------- tree view (3 lines per node)
 let treeData = null, exifStats = { by_album: {}, total: 0, scanned: 0 }, treeBooted = false, treeLoading = false;
+// scroll preservation across live refreshes: reopened nodes load their content
+// asynchronously (photos / log spans), which grows the page AFTER the first
+// restore - so we re-apply the saved scroll when that content settles.
+let scrollRestore = null;
+function applyScrollRestore() { if (scrollRestore) scrollRestore.view.scrollTop = scrollRestore.value; }
+function keepScroll(view, value) {
+  scrollRestore = { view, value };
+  applyScrollRestore();
+  setTimeout(applyScrollRestore, 0);
+  setTimeout(applyScrollRestore, 150);
+  setTimeout(applyScrollRestore, 500);
+  setTimeout(() => { if (scrollRestore && scrollRestore.view === view) scrollRestore = null; }, 1500);
+}
 const PHOTOS_PAGE = 500;
 
 const STATE_META = {
@@ -552,6 +568,7 @@ function makeLogPane(key, loader) {
     pre.textContent = "loading…";
     try { pre.textContent = (await loader()).join("\n"); }
     catch (e) { pre.textContent = String(e); }
+    applyScrollRestore();
   });
   return det;
 }
@@ -695,6 +712,7 @@ async function loadPhotos(s, a, box, offset) {
       more.addEventListener("click", () => { more.remove(); loadPhotos(s, a, box, offset + r.photos.length); });
       box.appendChild(more);
     }
+    applyScrollRestore();
   } catch (e) {}
 }
 async function refreshTree() {
@@ -724,7 +742,7 @@ function renderTree() {
   applyTreeFilter($("tree-q").value.trim().toLowerCase());
   for (const d of root.querySelectorAll("details.tnode[data-key]"))  // parents come first
     if (openKeys.has(d.dataset.key)) d.open = true;
-  view.scrollTop = scroll;
+  keepScroll(view, scroll);
   treeBooted = true;
   const albums = t.sessions.reduce((n, s) => n + s.albums.length, 0);
   const photos = t.sessions.reduce((n, s) => n + s.photos_n, 0);
@@ -854,7 +872,7 @@ function renderOverview() {
   applyAlbumsFilter($("albums-q").value.trim().toLowerCase());
   for (const d of view.querySelectorAll("details.tnode[data-key]"))
     if (openKeys.has(d.dataset.key)) d.open = true;
-  view.scrollTop = scroll;
+  keepScroll(view, scroll);
   if (pendingAlbum) {
     const k = pendingAlbum;
     pendingAlbum = null;
