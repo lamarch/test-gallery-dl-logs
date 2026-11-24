@@ -285,6 +285,21 @@ skip) or when the file was already there from a previous run.
   expanded nodes and scroll. Browser back/forward works across tabs and
   `#album=<set_id>` / `#file=<path>` permalinks (History API).
 
+## Operational logging (docker logs)
+
+The webui logs operational warnings/errors to its stdout/stderr, so
+`docker logs <webui-container>` tells you when something is degraded. Rules:
+
+- **A healthy instance logs nothing at WARNING or above** (a test enforces it).
+- **ERROR** = the app is serving wrong or missing data (log/albums file unreadable,
+  disk index scan failed without a cached fallback, EXIF precompute pass crashed).
+- **WARNING** = degraded but best-effort (URL matched literally or by set-id
+  fallback, non-URL `#` line ignored, caps hit / results partial, file vanished
+  between index and serve, undecodable image, invalid `DISPLAY_TZ`).
+- Every warning is **deduplicated** per root cause (frequent endpoints do not
+  spam one line per request), and gets an INFO-level `...: readable again`
+  counterpart when the condition heals.
+
 ## Development / tests
 
 ```bash

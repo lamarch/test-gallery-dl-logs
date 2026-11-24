@@ -29,10 +29,44 @@ LOG = logging.getLogger("fb-dl")
 _warn_state = {}
 
 
+_MISSING = object()
+
+
 def _warn_changed(key, version, msg):
-    if _warn_state.get(key) != version:
+    """One warning per (key, version); version may be None (must still emit)."""
+    if _warn_state.get(key, _MISSING) != version:
         _warn_state[key] = version
         LOG.warning(msg)
+
+
+def _error_changed(key, version, msg):
+    """ERROR-level twin of _warn_changed (same dedupe state map)."""
+    if _warn_state.get(key, _MISSING) != version:
+        _warn_state[key] = version
+        LOG.error(msg)
+
+
+def _ok_recovered(key, msg):
+    """Recovery counterpart of a warning: INFO level, emitted only when the
+    warning had actually fired earlier (healthy runs stay 100% silent)."""
+    if _warn_state.pop(key, _MISSING) is not _MISSING:
+        LOG.info(msg)
+
+
+def _warn_log_missing(e):
+    """One dedupe key for every 'log file unreadable' site."""
+    _warn_changed("log-missing", None,
+                  "log file: not readable — log-derived views are empty: %s (%s)"
+                  % (LOG_FILE, e))
+
+
+def _ok_log_missing():
+    """Recovery counterpart of _warn_log_missing."""
+    try:
+        os.stat(LOG_FILE)
+        _ok_recovered("log-missing", "log file: readable again: %s" % LOG_FILE)
+    except OSError:
+        pass
 
 
 LOG_FILE = os.environ.get("LOG_FILE", "/downloads/logs/fb-dl.log")
@@ -126,7 +160,8 @@ def get_logs(
 ):
     try:
         size = os.path.getsize(LOG_FILE)
-    except OSError:
+    except OSError as e:
+        _warn_log_missing(e)
         size = 0
     base = {"path": LOG_FILE, "size": size, "max_render": MAX_RENDER}
     if before > 0:
@@ -164,7 +199,8 @@ def _scan_range():
     """Return (start_byte, size) of the log region scanned for stats/search/tree."""
     try:
         size = os.path.getsize(LOG_FILE)
-    except OSError:
+    except OSError as e:
+        _warn_log_missing(e)
         return 0, 0
     if SCAN_MAX_BYTES > 0 and size > SCAN_MAX_BYTES:
         return size - SCAN_MAX_BYTES, size
@@ -181,7 +217,8 @@ def _iter_log_entries(chunk=1024 * 1024, start_byte=None, end_byte=None):
         start = start_byte
         try:
             size = os.path.getsize(LOG_FILE)
-        except OSError:
+        except OSError as e:
+            _warn_log_missing(e)
             return
     if end_byte is not None:
         size = min(size, end_byte)
@@ -231,7 +268,8 @@ def search(q: str = "", limit: int = Query(default=200, ge=1, le=2000)):
     try:
         st = os.stat(LOG_FILE)
         key = (st.st_size, st.st_mtime_ns, ql)
-    except OSError:
+    except OSError as e:
+        _warn_log_missing(e)
         return empty
     if _search_cache["key"] == key:
         return _search_cache["value"]
@@ -279,9 +317,9 @@ def _read_albums_file(path):
                       % (path, e))
         return None
     try:
-        st = os.stat(path)
-        _warn_changed(("albums-missing", path), (st.st_size, st.st_mtime_ns),
-                      "albums file readable again: %s" % path)
+        os.stat(path)
+        _ok_recovered(("albums-missing", path),
+                      "albums file: readable again — done/remaining statuses restored: %s" % path)
     except OSError:
         pass
     return albums
@@ -678,7 +716,7 @@ def get_tree():
         st = os.stat(LOG_FILE)
         key = (st.st_size, st.st_mtime_ns, None, None)
     except OSError as e:
-        _warn_changed(("log-missing", LOG_FILE), None,
+        _warn_changed("log-missing", None,
                       "log file not readable: %s (%s)" % (LOG_FILE, e))
         return {"sessions": [], "runs": 0, "done_urls": [], "done_sets": []}, {}
     # albums.txt is part of the tree's done/incomplete verdicts: a '#' written
@@ -926,7 +964,8 @@ def _span_lines(spans, key, offset, limit):
         raise HTTPException(404, "not found")
     try:
         size = os.path.getsize(LOG_FILE)
-    except OSError:
+    except OSError as e:
+        _warn_log_missing(e)
         return {"lines": [], "total": 0, "offset": offset}
     start = max(0, min(span[0], size))
     end = max(start, min(span[1], size))
@@ -1165,7 +1204,12 @@ def file_endpoint(path: str = ""):
     full = _safe_path(path)
     if not full:
         raise HTTPException(404)
-    return FileResponse(full)
+    try:
+        return FileResponse(full)
+    except OSError as e:
+        _warn_changed(("file-serve", full), None,
+                      "file: vanished between index and serve: %s (%s)" % (full, e))
+        raise HTTPException(404)
 
 
 _thumb_cache = {}
@@ -1196,7 +1240,10 @@ def thumb_endpoint(path: str = "", w: int = Query(default=160, ge=16, le=THUMB_M
             buf = io.BytesIO()
             im.save(buf, "JPEG", quality=70)
             data = buf.getvalue()
-    except Exception:
+    except Exception as e:
+        _warn_changed(("thumb-decode", full), st.st_mtime_ns,
+                      "thumbnail: file is not a decodable image (%s): %s"
+                      % (type(e).__name__, full))
         raise HTTPException(422, "not a decodable image")
     if len(_thumb_cache) > 1000:
         _thumb_cache.clear()
@@ -1220,6 +1267,9 @@ def _exif_epoch(dto, offset):
     try:
         return dt.replace(tzinfo=ZoneInfo(DISPLAY_TZ)).timestamp()
     except Exception:
+        _warn_changed(("display-tz", DISPLAY_TZ), None,
+                      "exif: invalid DISPLAY_TZ %r — exif times interpreted as UTC"
+                      % DISPLAY_TZ)
         return dt.replace(tzinfo=timezone.utc).timestamp()
 
 
@@ -1241,7 +1291,9 @@ def _exif_info(full, rel):
             sub = ex.get_ifd(0x8769)
             dto = ex.get(36867) or sub.get(36867) or None
             off = sub.get(36881) or None  # OffsetTimeOriginal
-    except Exception:
+    except Exception as e:
+        _warn_changed(("exif-read", full), st.st_mtime_ns,
+                      "exif: unreadable image (%s): %s" % (type(e).__name__, full))
         dto = None
     name_date = None
     m = FN_DATE_RE.search(os.path.basename(full))
@@ -1322,8 +1374,10 @@ def _exif_worker():
     while True:
         try:
             _exif_scan_pass()
-        except Exception:
-            pass
+        except Exception as e:
+            _error_changed(("exif-worker",), type(e).__name__,
+                           "exif precompute pass failed (%s): %s" % (type(e).__name__, e))
+            LOG.debug("exif worker traceback", exc_info=True)
         time.sleep(EXIF_SCAN_INTERVAL)
 
 
@@ -1385,9 +1439,11 @@ def raw():
 def status():
     try:
         st = os.stat(LOG_FILE)
+        _ok_log_missing()
         return {"exists": True, "size": st.st_size, "mtime": st.st_mtime,
                 "timezone": DISPLAY_TZ, "rejection_regex": REJECTION_PATTERN}
-    except OSError:
+    except OSError as e:
+        _warn_log_missing(e)
         return {"exists": False, "size": 0, "mtime": None, "timezone": DISPLAY_TZ,
                 "rejection_regex": REJECTION_PATTERN}
 
