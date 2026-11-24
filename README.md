@@ -86,6 +86,9 @@ albums overview + disk index as a downloadable attachment).
 - **Line 3**: errors / rejections / last activity / log size, lines, display timezone.
 
 ### Tree - session -> album -> photo, 3 lines per node
+Every foldable node (session, album, card session row) shows a clear `▸/▾'
+chevron button at the left of its first line instead of the browser's default
+disclosure triangle.
 The log is parsed into a tree. **Each run = one session branch** (a new branch starts
 at every `[gallery-dl][debug] Version ...` line, so restarts/power cuts are visible).
 Only the most recent session/album auto-expands. The tree loads when the tab is opened
@@ -106,7 +109,9 @@ a single album set) and the logs button can no longer diverge between views:
 - **Line 2**: the count line: **Detected** (photo pages in logs) then the counters
   **On-disk / Downloaded / Interrupted / Missing / Already / Rejected / Foreign /
   Dup logs / Dup disk**
-  (all chips always shown, zero counts included) —
+  (all chips always shown, zero counts included; each chip can be toggled off
+  individually via the ⚙ chips button in the header, persisted in the
+  browser) —
   "On-disk" is the state called `full` in the API, "Downloaded" counts CDN payloads
   seen in logs (on-disk + missing; already-existing files don't count), "Rejected"
   marks photos that hit an anti-bot rejection (kept even if a later try succeeded),
