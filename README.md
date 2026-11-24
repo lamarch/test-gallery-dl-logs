@@ -111,10 +111,13 @@ fbid). Each node (session / album / photo) renders 3 lines:
   this album, differentiated per source (once per photo; every photo instance
   also carries its own `⧉×N` badge — in the logs and/or on disk) —
   + sleep + downloaded size + **on-disk size**.
-- **Line 3**: first mtime + vanity id (numbers only) + EXIF counts (`✅ synced /
-  ⚠️ mismatch / 🚫 no exif`, background precompute) + a **logs** button per node
-  (raw log span: `/api/session/{s}/logs`, `/api/album/{s}/{a}/logs`,
-  `/api/photo/{s}/{a}/{p}/logs`).
+- **Line 3**: first mtime + vanity id (numbers only, album identity rows only -
+  never the session rows inside cards) + EXIF counts as discreet colored text
+  (`synced/mismatch/no exif` counts in green/amber/gray, no emojis) + a
+  **logs** button per node - raw log span: `/api/session/{s}/logs`,
+  `/api/album/{s}/{a}/logs`, `/api/photo/{s}/{a}/{p}/logs`; the album card
+  header's logs button shows all of that album's sessions' spans
+  concatenated.
 - **Expanding an album also expands its photos** (paginated by `PHOTOS_PAGE_SIZE=500`
   with "load more", so huge albums stay fast); each photo shows a **64 px thumbnail**.
 - Album status (tooltip on every chip): done per `albums.txt` `#` marker / **banned =
