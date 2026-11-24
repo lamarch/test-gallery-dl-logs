@@ -101,7 +101,7 @@ fbid). Each node (session / album / photo) renders 3 lines:
 - **Line 3**: photo -> filename, name-date, mtime, EXIF time + status chip; album ->
   most recent mtime + EXIF status counts (background precompute, see below).
 - **Expanding an album also expands its photos** (paginated by `PHOTOS_PAGE_SIZE=500`
-  with "load more", so huge albums stay fast); each photo shows a **40 px thumbnail**.
+  with "load more", so huge albums stay fast); each photo shows a **64 px thumbnail**.
 - Album status: done per `albums.txt` `#` marker / banned / error / interrupted, with
   the end reason as tooltip. Photo FB browser link:
   `https://www.facebook.com/photo/?fbid=<id>&set=a.<set_id>`.
@@ -122,7 +122,7 @@ Read-only index of `DOWNLOADS_DIR` (the `logs/` dir is skipped). Expected layout
 `downloads/facebook/<user>/<album title> (a.<set_id>)/YYYYMMDD_HHMMSS_<fbid>.<ext>` -
 the album set id **and title** come from the `(a. ...)` directory, the photo fbid and the
 capture date from the filename. Lightweight server-side thumbnails
-(`/api/thumb?path=...&w=120`, so no full-HD download per row), filters by album /
+(`/api/thumb?path=...&w=176`, so no full-HD download per row), filters by album /
 name / fbid / **log state** (full / already / foreign) / **EXIF state**, per-row EXIF
 button, rescan button. A `#file=<path>` link (from the tree) opens this tab prefilled
 and scrolls/highlights the row.

@@ -81,8 +81,8 @@ a.cnt{text-decoration:none}
 .copy-btn{padding:0 6px;font-size:11px;line-height:1.5;margin-left:2px}
 .logs-btn{font-size:11px;padding:1px 8px}
 .more-btn{margin:6px 0;font-size:12px}
-.thumb40{width:40px;height:40px;object-fit:cover;border-radius:.375rem;border:1px solid var(--border);vertical-align:middle;margin-right:6px}
-.thumb{width:56px;height:56px;object-fit:cover;border-radius:.375rem;border:1px solid var(--border);vertical-align:middle;margin-right:8px}
+.thumb64{width:64px;height:64px;object-fit:cover;border-radius:.375rem;border:1px solid var(--border);vertical-align:middle;margin-right:6px}
+.thumb{width:88px;height:88px;object-fit:cover;border-radius:.375rem;border:1px solid var(--border);vertical-align:middle;margin-right:8px}
 .logpane{max-height:300px;overflow:auto;background:var(--bg);padding:6px;border-radius:6px;
   font:12px/1.5 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;white-space:pre-wrap;word-break:break-all}
 .files-table{width:100%;border-collapse:collapse;background:#fff;border:1px solid var(--border);border-radius:.5rem}
@@ -736,7 +736,7 @@ function photoRow(s, a, p, setId) {
   const st = p.state || p.status;
   row.innerHTML =
     '<div class="n-l1">' +
-    (p.path ? '<img class="thumb40" loading="lazy" src="/api/thumb?path=' + encodeURIComponent(p.path) + '&w=40" alt="" onerror="this.style.display=&quot;none&quot;">' : "") +
+    (p.path ? '<img class="thumb64" loading="lazy" src="/api/thumb?path=' + encodeURIComponent(p.path) + '&w=64" alt="" onerror="this.style.display=&quot;none&quot;">' : "") +
     "🖼 <b>" + esc(p.fbid || "?") + "</b>" +
     ' <span class="stat">' + esc(fmtTs(p.ts)) + "</span> " +
     stateBadge(st) + "</div>" +
@@ -1033,7 +1033,7 @@ function renderFiles() {
     shown++;
     const row = document.createElement("tr");
     row.dataset.path = f.path;
-    row.innerHTML = '<td><img class="thumb" loading="lazy" src="/api/thumb?path=' + encodeURIComponent(f.path) + '&w=120" onerror="this.style.display=&quot;none&quot;"></td>' +
+    row.innerHTML = '<td><img class="thumb" loading="lazy" src="/api/thumb?path=' + encodeURIComponent(f.path) + '&w=176" onerror="this.style.display=&quot;none&quot;"></td>' +
       "<td>" + esc(f.name) + (f.fbid ? '<br><span class="stat">fbid=' + esc(f.fbid) + "</span>" : "") + "</td>" +
       '<td class="stat">' + humanSize(f.size) + "</td>" +
       '<td class="stat">' + esc(f.name_date || "?") + "</td>" +
