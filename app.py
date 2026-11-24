@@ -300,12 +300,28 @@ def albums():
     files = scan_downloads()["files"]
     dirnames = _dir_names(files)
     disk_counts = Counter(f.get("album_set") for f in files if f.get("album_set"))
+    disk_mtimes = {}
+    for f in files:
+        if f.get("album_set"):
+            k = f["album_set"]
+            disk_mtimes[k] = max(disk_mtimes.get(k, 0), f.get("mtime") or 0)
     t, _ = get_tree()
     log_albums = {}
     for s in t["sessions"]:
         for a in s["albums"]:
             key = "a." + a["set_id"] if a.get("set_id") else a["url"]
-            log_albums.setdefault(key, a)
+            log_albums.setdefault(key, []).append(a)
+
+    def _timing(key):
+        """(total_duration_s, last_activity_epoch) for one album key: sum of
+        its log spans' durations, and the newest of log-end / disk-mtime."""
+        nodes = log_albums.get(key) or []
+        spans = [(_ts_epoch(a["start"]), _ts_epoch(a["end"])) for a in nodes]
+        total = sum(e - s for s, e in spans if s is not None and e is not None)
+        ends = [e for _, e in spans if e]
+        mtime = disk_mtimes.get(key, 0)
+        candidates = ends + ([mtime] if mtime else [])
+        return total, (max(candidates) if candidates else None)
     out = []
     counts = {"done": 0, "incomplete": 0, "not_started": 0, "not_in_file": 0}
     current = None
@@ -324,20 +340,27 @@ def albums():
         if not done and current is None:
             current = url
         counts[status] += 1
+        duration, last = _timing(key)
         out.append({"url": url, "set_id": set_id, "link": _album_link(url, set_id),
                     "status": status, "in_file": True, "done": done, "in_logs": in_logs,
                     "on_disk": disk_counts.get(key, 0),
+                    "total_duration_s": duration,
+                    "last_activity": last,
                     "name": _album_display_name(url, set_id, dirnames)})
     for key in sorted(set(log_albums) | set(disk_counts)):
         if key in seen:
             continue
-        a = log_albums.get(key)
+        nodes = log_albums.get(key) or []
+        a = nodes[0] if nodes else None
         set_id = a["set_id"] if a else (key[2:] if key.startswith("a.") else None)
         counts["not_in_file"] += 1
+        duration, last = _timing(key)
         out.append({"url": a["url"] if a else None, "set_id": set_id,
                     "link": a["link"] if a else None,
                     "status": "not_in_file", "in_file": False, "done": False,
                     "in_logs": a is not None, "on_disk": disk_counts.get(key, 0),
+                    "total_duration_s": duration,
+                    "last_activity": last,
                     "name": _album_display_name(a["url"], a["set_id"], dirnames) if a
                             else dirnames.get(key)})
     counts["total"] = len(out)
@@ -350,6 +373,14 @@ def albums():
 def _ts_of(line):
     m = TS_RE.match(line)
     return m.group(1) if m else ""
+
+
+def _ts_epoch(ts):
+    """Epoch of a log timestamp string (logs are UTC); None if unparsable."""
+    try:
+        return datetime.strptime(ts, "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc).timestamp()
+    except (ValueError, TypeError):
+        return None
 
 
 def _parse_url_ids(url):
@@ -646,6 +677,9 @@ def _annotate_disk(t, files=None):
                     p["mtime"] = f["mtime"]
                     p["name_date"] = f.get("name_date")
             states = Counter(p["state"] for p in a["photos"])
+            # "downloaded" = CDN download payload seen in the logs (on-disk +
+            # missing); photos already on disk from a previous run don't count
+            states["downloaded"] = sum(1 for p in a["photos"] if p.get("dl"))
             if key and key not in counted_foreign:
                 counted_foreign.add(key)
                 # on disk in this album's dir, never seen in any log session
@@ -828,6 +862,7 @@ def albums_overview():
                 "session": s["idx"], "album_idx": a["idx"],
                 "session_start": s["start"], "start": a["start"], "end": a["end"],
                 "photos_n": a["photos_n"], "files": a["files"], "bytes": a["bytes"],
+                "states": a.get("states", {}),
                 "sleeps": a["sleeps"], "errors": a["errors"], "rejections": a["rejections"],
                 "status": a["status"], "end_reason": a.get("end_reason")})
             e["photos"] += a["photos_n"]
@@ -1301,6 +1336,8 @@ def summary():
         disk = disk_by_set.get(key, set())
         for p in photos:
             states[_photo_state(p, disk)] += 1
+            if p.get("dl"):
+                states["downloaded"] += 1
         states["foreign"] += len(disk - {p["fbid"] for p in photos if p.get("fbid")})
     cur_set = st.get("current_album_set")
     wake_epoch = None

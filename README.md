@@ -94,8 +94,10 @@ nodes and scroll position are preserved) and has a **filter box** (album name / 
 fbid). Each node (session / album / photo) renders 3 lines:
 - **Line 1**: icon + label (Session #N / album name + `a.<id>` / photo fbid) + a
   **copy-ID button**, start -> end, **duration**, status badge.
-- **Line 2**: the 5 counters **Full / Interrupted / Missing / Already / Foreign**
-  (counts for a session/album, the state badge for a photo) + sleep + downloaded size +
+- **Line 2**: the count line: **Detected** (photo pages in logs) then the counters
+  **On-disk / Downloaded / Interrupted / Missing / Already / Foreign** — "On-disk"
+  is the state called `full` in the API, "Downloaded" counts CDN payloads seen in logs
+  (on-disk + missing; already-existing files don't count) — + sleep + downloaded size +
   FB browser link + `#album=<set_id>` link (album) **XOR** `#file=<path>` link (photo,
   opens the Files tab filtered on it) + a **logs** button (raw log span of that node:
   `/api/session/{s}/logs`, `/api/album/{s}/{a}/logs`, `/api/photo/{s}/{a}/{p}/logs`).
@@ -109,13 +111,16 @@ fbid). Each node (session / album / photo) renders 3 lines:
 
 ### Albums - 3-way comparison + cross-session view
 Top table compares **albums.txt x logs x disk** per album: in albums.txt (done `#` /
-pending / -), started in logs, files on disk, status - with a counts line separating
+pending / -), started in logs, files on disk, last activity (newest log end / disk
+mtime) + total session duration, status - with a counts line separating
 **unfinished** (started, not done) from **remaining** (in albums.txt, never started)
 and **not_in_file** (seen in logs/on disk but absent from albums.txt). Below, one card
 per album (keyed by set id, not chronological) listing **each session** that touched
 it - expandable to show **that session's photos** (paginated, 3-line rows, per-photo
 logs) - plus a **retried** badge when an album appears in more than one session (e.g.
-after a crash or an anti-bot ban), the 5 state counters, totals, errors/rejections.
+after a crash or an anti-bot ban), the count line (Detected + state counters, see the
+Tree tab), total duration, EXIF counts, errors/rejections; albums with no name parsed
+show **(unnamed)** next to their `a.<set_id>`.
 Deep-linkable with `#album=<set_id>` anchors; filter box on top.
 
 ### Files - disk view
