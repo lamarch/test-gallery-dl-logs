@@ -109,9 +109,9 @@ a single album set) and the logs button can no longer diverge between views:
 - **Line 2**: the count line: **Detected** (photo pages in logs) then the counters
   **On-disk / Downloaded / Interrupted / Missing / Already / Rejected / Foreign /
   Dup logs / Dup disk**
-  (all chips always shown, zero counts included; each chip can be toggled off
-  individually via the ⚙ chips button in the header, persisted in the
-  browser) —
+  (all chips always shown, zero counts included; each chip is a visual toggle
+  button - clicking flips a pressed/blue look on that chip instance only,
+  no other effect) —
   "On-disk" is the state called `full` in the API, "Downloaded" counts CDN payloads
   seen in logs (on-disk + missing; already-existing files don't count), "Rejected"
   marks photos that hit an anti-bot rejection (kept even if a later try succeeded),
@@ -145,7 +145,9 @@ and **not_in_file** (seen in logs/on disk but absent from albums.txt). A
 **duplicates** column flags album ids (set=a.) seen more than once per source
 (suspicious entries sharing an id, several on-disk directories, or several
 distinct URLs started for the same id), with a `N duplicated album ids` warning
-in the counts line. Below, one card
+in the counts line - and an **exif** column shows the same discreet
+colored per-album EXIF counts as everywhere else (green synced / amber
+mismatch / gray no exif). Below, one card
 per album (keyed by set id, not chronological) listing **each session** that touched
 it - expandable to show **that session's photos** (paginated, 3-line rows, per-photo
 logs) - plus a **retried** badge when an album appears in more than one session (e.g.
