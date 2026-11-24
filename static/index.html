@@ -67,6 +67,8 @@ details[open]>summary .chev::before{content:"\25BE"}
 .cnt[data-chip]:hover{outline:1px dashed var(--muted);outline-offset:1px}
 .cnt[data-chip].chip-on{background:var(--blue);color:#fff;border-radius:.375rem}
 .cnt[data-chip].chip-on b{color:#fff}
+.cmp-progress{height:10px;background:var(--border);border-radius:.5rem;overflow:hidden;margin:6px 0 2px}
+.cmp-progress>div{height:100%;background:var(--ok);border-radius:.5rem;transition:width .3s}
 summary:hover{background:#e9ecef}
 .badge{display:inline-block;padding:.15em .6em;border-radius:.375rem;font-size:11px;font-weight:600;border:1px solid transparent;white-space:nowrap}
 .badge.done,.badge.downloaded{color:#fff;background:var(--ok);border-color:var(--ok)}
@@ -1040,14 +1042,30 @@ function renderCompare(cmp) {
   const el = $("albums-compare");
   if (!cmp) { el.replaceChildren(); return; }
   const c = cmp.counts || {};
+  const done = c.done || 0, started = c.incomplete || 0, remaining = c.not_started || 0,
+        notInFile = c.not_in_file || 0, total = c.total || 0;
+  const pct = total ? Math.round(100 * done / total) : 0;
+  const chipTxt = (n, label, tip) =>
+    '<span class="cnt" title="' + esc(tip) + '"><b>' + n + "</b> " + label + "</span>";
   const h = document.createElement("h3");
-  h.textContent = "Albums comparison (albums.txt x logs x disk): " +
-    (c.done || 0) + " done · " + (c.incomplete || 0) + " unfinished (started, not done) " +
-    "· " + (c.not_started || 0) + " remaining (in file, never started) " +
-    "· " + (c.not_in_file || 0) + " not in file · " + (c.total || 0) + " total" +
-    (c.dup_album_ids ? " · ⚠ " + c.dup_album_ids + " duplicated album id" +
-                       (c.dup_album_ids > 1 ? "s" : "") : "");
-  if (!cmp.albums || !cmp.albums.length) { el.replaceChildren(h); return; }
+  h.innerHTML = "Albums comparison (albums.txt x logs x disk): " +
+    chipTxt(done, "done", "Marked '#' (done) in albums.txt") +
+    " · " + chipTxt(started, "unfinished", "Started in the logs, not marked done yet") +
+    " · " + chipTxt(remaining, "remaining", "In albums.txt, never started in the logs") +
+    " · " + chipTxt(notInFile, "not in file", "Seen in the logs / on disk but absent from albums.txt") +
+    " · " + chipTxt(total, "total", "All rows above: albums.txt entries + albums seen in logs or on disk") +
+    (c.dup_album_ids ? ' · <span class="cnt" title="Album ids (set=a.) seen more than once per source"><b>' + WARN + " " +
+      c.dup_album_ids + "</b> duplicated</span>" : "");
+  const progress = document.createElement("div");
+  progress.className = "cmp-progress";
+  progress.title = "Marked done (" + done + "/" + total + " albums, " + pct + "%) - unfinished ones are still in progress";
+  const fill = document.createElement("div");
+  fill.style.width = pct + "%";
+  progress.appendChild(fill);
+  const pctTxt = document.createElement("div");
+  pctTxt.className = "stat";
+  pctTxt.textContent = TRI + " " + pct + "% done (" + done + "/" + total + ")";
+  if (!cmp.albums || !cmp.albums.length) { el.replaceChildren(h, progress, pctTxt); return; }
   const table = document.createElement("table");
   table.className = "files-table compare-table";
   table.innerHTML = "<thead><tr>" +
@@ -1084,7 +1102,7 @@ function renderCompare(cmp) {
     tb.appendChild(tr);
   }
   table.appendChild(tb);
-  el.replaceChildren(h, table);  // single swap
+  el.replaceChildren(h, progress, pctTxt, table);  // single swap
 }
 function dupBadges(a) {  // duplicated album-id markers for one compare row
   const parts = [];
