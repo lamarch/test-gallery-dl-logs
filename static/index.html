@@ -63,11 +63,9 @@ summary::-webkit-details-marker{display:none}
 .chev{padding:0 7px;margin:0 2px 0 -4px;border-radius:.25rem}
 .chev::before{content:"\25B8"}
 details[open]>summary .chev::before{content:"\25BE"}
-.chips-wrap{position:relative}
-#chips-menu{position:absolute;right:0;top:36px;z-index:60;background:var(--panel);
-  border:1px solid var(--border);border-radius:.5rem;padding:10px 14px;box-shadow:0 4px 14px rgba(16,24,40,.14);
-  display:flex;flex-direction:column;gap:4px;max-height:60vh;overflow:auto;min-width:230px}
-#chips-menu label{display:flex;gap:8px;align-items:center;cursor:pointer;white-space:nowrap}
+.cnt[data-chip]{cursor:pointer}
+.cnt[data-chip]:hover{outline:1px dashed var(--muted);outline-offset:1px}
+.chip-restore{color:var(--muted);font-style:italic}
 summary:hover{background:#e9ecef}
 .badge{display:inline-block;padding:.15em .6em;border-radius:.375rem;font-size:11px;font-weight:600;border:1px solid transparent;white-space:nowrap}
 .badge.done,.badge.downloaded{color:#fff;background:var(--ok);border-color:var(--ok)}
@@ -134,10 +132,7 @@ select{background:#fff;border:1px solid #ced4da;color:var(--fg);border-radius:.3
   </div>
   <span id="rej-banner" title="Scraping rejections detected in the log — click to jump to the first rejection line in the Log tab"></span>
   <a href="/api/export" download="web-dashboard-export.json"><button>⬇ Export JSON</button></a>
-  <div class="chips-wrap">
-    <button id="btn-chips" title="Show / hide the counter chips of the count line (session and album headers)">⚙ chips</button>
-    <div id="chips-menu" hidden></div>
-  </div>
+
   <div id="stats">
     <span id="dot" title="stream connection"></span>
     <span>lines <b id="st-lines">–</b></span>
@@ -593,53 +588,53 @@ function stateBadge(st) {
 function countersHtml(states, d) {  // ... / foreign / dup in logs / dup on disk
   const order = [["full", "On-disk"], ["downloaded", "Downloaded"], ["interrupted", "Interrupted"],
                  ["missing", "Missing"], ["already", "Already"], ["rejected", "Rejected"],
-                 ["foreign", "Foreign"], ["dup_in_logs", "Dup logs"], ["dup_on_disk", "Dup disk"]]
-                 .filter((kv) => !chipHidden.has(kv[0]));
+                 ["foreign", "Foreign"], ["dup_in_logs", "Dup logs"], ["dup_on_disk", "Dup disk"]];
   return order.map((kv) => {
     const k = kv[0], label = kv[1];
     const meta = STATE_META[k === "dup_in_logs" ? "dup_logs" : k === "dup_on_disk" ? "dup_disk" : k];
     const n = (d && d[k]) || (states && states[k]) || 0;
-    return '<span class="cnt" title="' + esc(meta.title) + '">' + meta.icon +
-      " " + label + " <b>" + n + "</b></span>";
+    return chip(k, '<span class="cnt" title="' + esc(meta.title) + ' · click to hide">' + meta.icon +
+      " " + label + " <b>" + n + "</b></span>");
   }).join(" ");
 }
-// per-chip visibility: each counter of the count line can be toggled off
-// individually (persisted in localStorage). One registry, all views.
-const CHIP_DEFS = [
-  ["detected", "🖼 Detected"], ["full", "On-disk"], ["downloaded", "Downloaded"],
-  ["interrupted", "Interrupted"], ["missing", "Missing"], ["already", "Already"],
-  ["rejected", "Rejected"], ["foreign", "Foreign"],
-  ["dup_in_logs", "⧉ Dup logs"], ["dup_on_disk", "⧉ Dup disk"],
-  ["sleep", "💤 sleep"], ["bytes", "💾 bytes"], ["on_disk_size", "💽 on-disk size"],
-  ["missing_on_disk", "⚠ missing on disk"], ["extra_on_disk", "➕ extra on disk"],
-  ["errors", "✖ errors"], ["rejections", "🚫 rejections"],
-  ["rejections_unresolved", "🚫 unresolved"], ["sessions", "sessions list"],
-];
+// per-chip visibility: every count-line chip hides itself on click
+// (persisted in localStorage). One registry, all views. The "+N hidden"
+// chip at the end of the line restores everything.
+const CHIP_LABELS = {
+  detected: "Detected", full: "On-disk", downloaded: "Downloaded",
+  interrupted: "Interrupted", missing: "Missing", already: "Already",
+  rejected: "Rejected", foreign: "Foreign",
+  dup_in_logs: "Dup logs", dup_on_disk: "Dup disk",
+  sleep: "sleep", bytes: "bytes", on_disk_size: "on-disk size",
+  missing_on_disk: "missing on disk", extra_on_disk: "extra on disk",
+  errors: "errors", rejections: "rejections",
+  rejections_unresolved: "unresolved", sessions: "sessions list",
+};
 let chipHidden = new Set(JSON.parse(localStorage.getItem("fbdl-chip-hidden") || "[]"));
 function chip(id, html) {
-  return chipHidden.has(id) ? "" : html;
+  if (chipHidden.has(id)) return "";
+  return html.replace("<span ", '<span data-chip="' + id + '" ', 1);
 }
-function buildChipsMenu() {
-  const m = $("chips-menu");
-  m.replaceChildren();
-  for (const [id, label] of CHIP_DEFS) {
-    const l = document.createElement("label");
-    const cb = document.createElement("input");
-    cb.type = "checkbox";
-    cb.checked = !chipHidden.has(id);
-    cb.addEventListener("change", () => {
-      if (cb.checked) chipHidden.delete(id); else chipHidden.add(id);
-      localStorage.setItem("fbdl-chip-hidden", JSON.stringify([...chipHidden]));
-      if (tab === "tree") renderTree();
-      else if (tab === "albums") renderOverview();
-    });
-    l.appendChild(cb);
-    l.appendChild(document.createTextNode(" " + label));
-    m.appendChild(l);
+function chipRerender() {
+  if (tab === "tree") renderTree();
+  else if (tab === "albums") renderOverview();
+}
+document.addEventListener("click", (e) => {
+  const c = e.target.closest(".cnt[data-chip]");
+  if (c) {
+    e.preventDefault();
+    e.stopPropagation();
+    if (c.classList.contains("chip-restore")) {
+      chipHidden.clear();
+    } else {
+      chipHidden.add(c.dataset.chip);
+    }
+    localStorage.setItem("fbdl-chip-hidden", JSON.stringify([...chipHidden]));
+    chipRerender();
   }
-}
+});
 function countersLine(detected, states, d) {
-  return chip("detected", '<span class="cnt" title="Photo pages detected in the logs (all sessions of this album)">🖼 Detected <b>' +
+  return chip("detected", '<span class="cnt" title="Photo pages detected in the logs (all sessions of this album) · click to hide">🖼 Detected <b>' +
     (detected || 0) + "</b></span> ") + countersHtml(states, d);
 }
 function exifCountsHtml(setKey) {
@@ -728,7 +723,6 @@ function sessionNode(s, isLast) {
   sum.innerHTML = albumLinesHtml(Object.assign({}, s, {
     session_idx: s.idx, expander: true,
     badge: badge(st, stCls, stTitle),
-    running: isLast,
     detected: s.photos_n,
     dur_s: isFinite(dur) ? dur / 1000 : null,
     // EXIF summary is per album: show it when the session touches one set
@@ -792,6 +786,9 @@ function albumLinesHtml(d, mode) {
     chip("rejections", (d.rejections ? ' <span class="cnt">🚫 <b>' + d.rejections + "</b></span>" : "")) +
     chip("rejections_unresolved", (d.rejections_unresolved ? ' <span class="cnt" title="Rejected photos never downloaded later">🚫 <b>' + d.rejections_unresolved + "</b> unresolved</span>" : "")) +
     chip("sessions", (d.sessions ? "<br>sessions: " + d.sessions.map(x => "#" + x).join(", ") : "")) +
+    (chipHidden.size ? '<span class="cnt chip-restore" data-chip="" title="' +
+      esc([...chipHidden].map(h => CHIP_LABELS[h] || h).join(", ")) +
+      ' hidden · click to restore all">+' + chipHidden.size + " hidden</span>" : "") +
     "</div>";
   const l3 = '<div class="n-l3"><span class="stat">mtime ' +
     ((d.first_mtime || d.max_mtime) ? esc(fmtEpoch(d.first_mtime || d.max_mtime)) : "—") + "</span>" +
@@ -1058,15 +1055,6 @@ async function loadCompare() {
     renderCompare(compareData);
   } catch (e) {}
 }
-$("btn-chips").addEventListener("click", (e) => {
-  e.preventDefault();
-  const m = $("chips-menu");
-  if (m.hidden) { buildChipsMenu(); m.hidden = false; } else m.hidden = true;
-});
-document.addEventListener("click", (e) => {
-  const w = document.querySelector(".chips-wrap");
-  if (w && !w.contains(e.target)) $("chips-menu").hidden = true;
-});
 function renderCompare(cmp) {
   const el = $("albums-compare");
   if (!cmp) { el.replaceChildren(); return; }

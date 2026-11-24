@@ -109,9 +109,9 @@ a single album set) and the logs button can no longer diverge between views:
 - **Line 2**: the count line: **Detected** (photo pages in logs) then the counters
   **On-disk / Downloaded / Interrupted / Missing / Already / Rejected / Foreign /
   Dup logs / Dup disk**
-  (all chips always shown, zero counts included; each chip can be toggled off
-  individually via the ⚙ chips button in the header, persisted in the
-  browser) —
+  (all chips always shown, zero counts included; **click any chip to hide it**
+  everywhere, persisted in the browser - a muted `+N hidden` chip at the end
+  of the line lists what is hidden and restores everything on click) —
   "On-disk" is the state called `full` in the API, "Downloaded" counts CDN payloads
   seen in logs (on-disk + missing; already-existing files don't count), "Rejected"
   marks photos that hit an anti-bot rejection (kept even if a later try succeeded),
