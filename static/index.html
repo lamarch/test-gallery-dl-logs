@@ -791,12 +791,28 @@ function albumCardAlbumNode(sd, a) {
   });
   return det;
 }
+function exifBadgeHtml(ex) {  // ONE exif badge painter for every view
+  return badge(ex.state, ex.state === "synced" ? "done" : "error",
+    "EXIF DateTimeOriginal interpreted in " + ex.tz + " · mtime " + fmtEpoch(ex.mtime) +
+    (ex.diff_s != null ? " · Δ" + ex.diff_s + "s" : "") + " · state: " + ex.state) +
+    " " + esc(ex.exif || "no exif");
+}
+async function exifPaintInto(el, path) {
+  const ex = await exifOf(path);
+  if (!ex || ex.mtime == null) { el.textContent = "error"; return ex; }
+  el.innerHTML = exifBadgeHtml(ex);
+  return ex;
+}
+function photoHref(fbid, setId) {  // ONE FB photo link builder
+  if (!fbid) return null;
+  return "https://www.facebook.com/photo/?fbid=" + fbid +
+    (setId ? "&set=a." + String(setId).replace(/^a*/, "") : "");
+}
 function photoRow(s, a, p, setId) {
   const row = document.createElement("div");
   row.className = "tnode photo";
   row.dataset.key = "s" + s + "/a" + a + "/p" + p.idx;
-  const linkPhoto = p.link_photo ||
-    (p.fbid ? "https://www.facebook.com/photo/?fbid=" + p.fbid + (setId ? "&set=a." + setId : "") : null);
+  const linkPhoto = p.link_photo || photoHref(p.fbid, setId);
   const st = p.state || p.status;
   // on-disk filename wins: the log's "Adjusting filename" can carry the
   // pre-conversion .avif name while the file on disk is .jpg
@@ -822,16 +838,7 @@ function photoRow(s, a, p, setId) {
   const pane = makeLogPane("logs-s" + s + "/a" + a + "/p" + p.idx, async () =>
     (await (await fetch("/api/photo/" + s + "/" + a + "/" + p.idx + "/logs?limit=20000")).json()).lines);
   row.appendChild(pane);  // single toggle: the pane's own summary
-  if (p.path) {
-    const chip = row.querySelector(".exif-chip");
-    exifOf(p.path).then(ex => {
-      if (!ex || ex.mtime == null) { chip.textContent = "error"; return; }
-      chip.innerHTML = badge(ex.state, ex.state === "synced" ? "done" : "error",
-        "EXIF DateTimeOriginal interpreted in " + ex.tz + " · mtime " + fmtEpoch(ex.mtime) +
-        (ex.diff_s != null ? " · Δ" + ex.diff_s + "s" : "") + " · state: " + ex.state) +
-        " " + esc(ex.exif || "no exif");
-    });
-  }
+  if (p.path) exifPaintInto(row.querySelector(".exif-chip"), p.path);
   return row;
 }
 function paintPhotos(s, a, box) {
@@ -1110,7 +1117,10 @@ function renderFiles() {
     const row = document.createElement("tr");
     row.dataset.path = f.path;
     row.innerHTML = '<td><img class="thumb" loading="lazy" src="/api/thumb?path=' + encodeURIComponent(f.path) + '&w=176" onerror="this.style.display=&quot;none&quot;"></td>' +
-      "<td>" + esc(f.name) + (f.fbid ? '<br><span class="stat">fbid=' + esc(f.fbid) + "</span>" : "") + "</td>" +
+      "<td>" + esc(f.name) + (f.fbid
+        ? '<br><span class="stat">fbid=' + esc(f.fbid) + '</span> <a class="cnt" href="' +
+          esc(photoHref(f.fbid, f.album_set)) + '" target="_blank" rel="noopener" title="Open this photo in Facebook (browser link)">🔗 FB</a>'
+        : "") + "</td>" +
       '<td class="stat">' + humanSize(f.size) + "</td>" +
       '<td class="stat">' + esc(f.name_date || "?") + "</td>" +
       '<td class="stat">' + esc(fmtEpoch(f.mtime)) + "</td>" +
@@ -1120,13 +1130,9 @@ function renderFiles() {
     const btn = row.querySelector(".exif-btn");
     const res = row.querySelector(".exif-res");
     const paintExif = async () => {
-      const ex = await exifOf(f.path);
-      if (!ex || ex.mtime == null) { res.textContent = "error"; return; }
-      res.innerHTML = badge(ex.state, ex.state === "synced" ? "done" : "error",
-        "EXIF DateTimeOriginal " + (ex.exif || "none") + " (interpreted in " + ex.tz + ") · mtime " + fmtEpoch(ex.mtime) +
-        (ex.diff_s != null ? " · Δ" + ex.diff_s + "s" : "")) +
-        " " + esc(ex.exif || "no exif");
-      if (curState !== "all" && !(curState in LOG_STATES) && ex.state !== curState) row.style.display = "none";
+      const ex = await exifPaintInto(res, f.path);
+      if (ex && curState !== "all" && !(curState in LOG_STATES) && ex.state !== curState)
+        row.style.display = "none";
     };
     let done = false;
     btn.addEventListener("click", async () => {
