@@ -530,6 +530,37 @@ class TreeApiTests(unittest.TestCase):
         self.assertEqual(a["link"], f"https://www.facebook.com/media/set/?set=a.{SET_ID}&type=3")
 
 
+class WaitingLineTests(unittest.TestCase):
+    """gallery-dl's anti-bot wait: "Waiting for 15 minutes until HH:MM:SS
+    (429 Too Many Requests)" - must feed the banner sleep + wake-up."""
+
+    def setUp(self):
+        self.client = TestClient(app)
+        with open(LOG_FILE, "a", encoding="utf-8") as f:
+            f.write("[2026-11-23 11:00:00] [facebook][info] "
+                    "Waiting for 15 minutes until 11:15:00 (429 Too Many Requests)\n")
+
+    def tearDown(self):
+        # restore the shared fixture for the classes that run after
+        orig = open(LOG_FILE, encoding="utf-8").read()
+        keep = orig[:orig.rfind("[2026-11-23 11:00:00]")]
+        with open(LOG_FILE, "w", encoding="utf-8") as f:
+            f.write(keep)
+
+    def test_waiting_line_sleep(self):
+        ls = self.client.get("/api/stats").json()["last_sleep"]
+        self.assertEqual(ls["seconds"], 900.0)
+        self.assertEqual(ls["reason"], "429 Too Many Requests")
+        self.assertEqual(ls["at"], "2026-11-23 11:00:00")
+        wake = self.client.get("/api/summary").json()["wake_epoch"]
+        self.assertAlmostEqual(wake, datetime(2026, 11, 23, 11, 15,
+                                              tzinfo=timezone.utc).timestamp())
+        # the wait accumulates into the running session/album sleep totals
+        t = self.client.get("/api/tree").json()
+        last = t["sessions"][-1]
+        self.assertGreaterEqual(last["sleeps"], 900.0)
+
+
 class FilesApiTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):

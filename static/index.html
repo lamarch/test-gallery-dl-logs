@@ -77,6 +77,9 @@ summary:hover{background:#e9ecef}
 .cnt{white-space:nowrap}
 a.cnt{text-decoration:none}
 .photo{padding:4px 8px;border-radius:.375rem}
+.tnode.photo{display:flex;align-items:flex-start;gap:8px;flex-wrap:wrap}
+.tnode.photo>.photo-info{flex:1;min-width:0}
+.tnode.photo>.logspane{flex-basis:100%}
 .photo:hover{background:#f1f3f5}
 .copy-btn{padding:0 6px;font-size:11px;line-height:1.5;margin-left:2px}
 .logs-btn{font-size:11px;padding:1px 8px}
@@ -553,7 +556,7 @@ function exifCountsHtml(setKey) {
   if (es) return '<span title="EXIF check (background precompute over disk files): ✅ synced = |mtime − exif| ≤ tolerance · ⚠️ mismatch · ○ no exif (script not run)">✅' +
     es.synced + " ⚠️" + es.mismatch + " ○" + es.no_exif + "</span>";
   if (exifStats.total) return '<span title="EXIF precompute in progress">scanning ' + exifStats.scanned + "/" + exifStats.total + "…</span>";
-  return "—";
+  return "";  // no EXIF data -> no chip at all
 }
 function copyBtn(text) {
   const b = document.createElement("button");
@@ -656,7 +659,7 @@ function albumNode(s, a, auto) {
     (a.set_id ? ' <a class="cnt" href="#album=' + esc(a.set_id) + '" title="Open this album in the Albums view">🗂 #album</a>' : "") +
     ' <button class="logs-btn">📜 logs</button></div>' +
     '<div class="n-l3"><span class="stat">mtime ' + (a.max_mtime ? esc(fmtEpoch(a.max_mtime)) : "—") +
-    " · exif " + exifCountsHtml("a." + a.set_id) +
+    (exifCountsHtml("a." + a.set_id) ? " · exif " + exifCountsHtml("a." + a.set_id) : "") +
     "</span></div>";
   det.appendChild(sum);
   if (a.set_id) sum.querySelector(".n-l1 .stat").after(copyBtn("a." + a.set_id));  // next to (a.<set_id>), not at line end
@@ -693,28 +696,26 @@ function photoRow(s, a, p, setId) {
   // pre-conversion .avif name while the file on disk is .jpg
   const shownName = p.path ? p.path.split("/").pop() : p.file;
   row.innerHTML =
-    '<div class="n-l1">' +
     (p.path ? '<img class="thumb64" loading="lazy" src="/api/thumb?path=' + encodeURIComponent(p.path) + '&w=64" alt="" onerror="this.style.display=&quot;none&quot;">' : "") +
-    "🖼 <b>" + esc(p.fbid || "?") + "</b>" +
+    '<div class="photo-info">' +
+    '<div class="n-l1"><b>' + esc(p.fbid || "?") + "</b>" +
     ' <span class="stat">' + esc(fmtTs(p.ts)) + "</span> " +
     stateBadge(st) + "</div>" +
-    '<div class="n-l2">' +
+    '<div class="n-l2"><span class="stat">' + esc(shownName || "—") + "</span>" +
     ' <span class="cnt" title="Sleep time attributed to this photo (sleep-download lines)">💤 <b>' + (p.sleep || 0).toFixed(1) + "s</b></span>" +
     ' <span class="cnt" title="Bytes of CDN payloads for this photo">💾 <b>' + humanSize(p.bytes) + "</b></span>" +
     (linkPhoto ? ' <a class="cnt" href="' + esc(linkPhoto) + '" target="_blank" rel="noopener" title="Open this photo in Facebook (browser link)">🔗 FB</a>' : "") +
-    (p.path ? ' <a class="cnt" href="#file=' + encodeURIComponent(p.path) + '" title="Open the Files view filtered on this file">🗂 #file</a>' : "") +
-    ' <button class="logs-btn">📜 logs</button></div>' +
+    (p.path ? ' <a class="cnt" href="#file=' + encodeURIComponent(p.path) + '" title="Open the Files view filtered on this file">📂 #file</a>' : "") +
+    "</div>" +
     '<div class="n-l3"><span class="stat">' +
-    (shownName ? esc(shownName) + " · " : "") +
     (p.name_date ? "name-date " + esc(p.name_date) + " · " : "") +
     (p.mtime ? "mtime " + esc(fmtEpoch(p.mtime)) + " · " : "") +
     'exif <span class="exif-chip" data-path="' + esc(p.path || "") + '">' + (p.path ? "…" : "—") + "</span>" +
-    "</span></div>";
+    "</span></div></div>";
   if (p.fbid) row.querySelector(".n-l1 b").after(copyBtn(p.fbid));  // copy button next to the fbid it copies
   const pane = makeLogPane("logs-s" + s + "/a" + a + "/p" + p.idx, async () =>
     (await (await fetch("/api/photo/" + s + "/" + a + "/" + p.idx + "/logs?limit=20000")).json()).lines);
-  wireLogsBtn(row, pane);
-  row.appendChild(pane);
+  row.appendChild(pane);  // single toggle: the pane's own summary
   if (p.path) {
     const chip = row.querySelector(".exif-chip");
     exifOf(p.path).then(ex => {
@@ -882,7 +883,7 @@ function albumCard(a) {
     ' <span class="cnt" title="Cumulative sleep time over all sessions">💤 <b>' + a.sleeps.toFixed(1) + "s</b></span>" +
     ' <span class="cnt" title="Bytes downloaded (CDN payloads)">💾 <b>' + humanSize(a.bytes) + "</b></span>" +
     ' <span class="cnt" title="Total duration over all sessions">⏱ ' + fmtDur(cardDur(a) / 1000) + "</span>" +
-    " exif " + exifCountsHtml(a.set_id ? "a." + a.set_id : "") +
+    (exifCountsHtml(a.set_id ? "a." + a.set_id : "") ? " exif " + exifCountsHtml(a.set_id ? "a." + a.set_id : "") : "") +
     (a.missing_on_disk ? ' <span class="cnt" title="Downloaded in logs but not on disk">⚠️ <b>' + a.missing_on_disk + "</b> missing</span>" : "") +
     (a.extra_on_disk ? ' <span class="cnt" title="On disk but never downloaded in logs">➕ <b>' + a.extra_on_disk + "</b> extra</span>" : "") +
     (a.errors ? ' <span class="cnt">✖ <b>' + a.errors + "</b></span>" : "") +

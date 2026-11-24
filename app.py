@@ -52,6 +52,7 @@ TS_RE = re.compile(r"^\[([^\]]+)\]")
 PROGRESS_RE = re.compile(r"^\[\d+/\d+\]")
 STARTED_RE = re.compile(r"Starting \w+Job for '(.+)'")  # greedy: URLs may contain '
 SLEEP_RE = re.compile(r"Sleeping ([\d.]+) seconds \(([^)]+)\)")
+WAIT_RE = re.compile(r"Waiting for ([\d.]+) (seconds|minutes|hours) until (\d{2}:\d{2}:\d{2})(?: \(([^)]+)\))?")
 DOWNLOAD_RE = re.compile(r"Adjusting filename extension of '([^']+)'")
 FAILED_RE = re.compile(r"Failed to download '([^']+)'")
 VERSION_RE = re.compile(r"\[gallery-dl\]\[debug\] Version ")
@@ -434,6 +435,12 @@ def _update_photo_node(p, line):
         secs = float(sm.group(1))
         reason = sm.group(2)
         if p is not None and reason == "download":
+            p["sleep"] += secs
+    wm = WAIT_RE.search(line)
+    if wm:
+        secs = float(wm.group(1)) * {"seconds": 1, "minutes": 60, "hours": 3600}[wm.group(2)]
+        reason = wm.group(4) or "waiting"
+        if p is not None:
             p["sleep"] += secs
     return payload, is_media, secs, reason
 
@@ -1265,6 +1272,14 @@ def stats():
         if m:
             ts = TS_RE.match(line)
             last_sleep = {"seconds": float(m.group(1)), "reason": m.group(2),
+                          "at": ts.group(1) if ts else ""}
+        w = WAIT_RE.search(line)
+        if w:
+            ts = TS_RE.match(line)
+            # "Waiting for 15 minutes until HH:MM:SS (429 Too Many Requests)"
+            mult = {"seconds": 1, "minutes": 60, "hours": 3600}[w.group(2)]
+            last_sleep = {"seconds": float(w.group(1)) * mult,
+                          "reason": w.group(4) or "waiting",
                           "at": ts.group(1) if ts else ""}
         m = LEVEL_RE.match(line)
         if m:
