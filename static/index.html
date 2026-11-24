@@ -108,6 +108,9 @@ select{background:#fff;border:1px solid #ced4da;color:var(--fg);border-radius:.3
 .compare-table{margin-bottom:16px}
 .compare-table th{color:var(--muted);font-size:12px}
 .acmp.hidden{display:none}
+.exif-c.ok{color:#2e7d32}
+.exif-c.warn{color:#b26a00}
+.exif-c.none{color:var(--muted)}
 </style>
 </head>
 <body>
@@ -592,9 +595,11 @@ function countersLine(detected, states, d) {
 }
 function exifCountsHtml(setKey) {
   const es = (exifStats.by_album || {})[setKey];
-  if (es) return '<span title="EXIF check (background precompute over disk files): ✅ synced = |mtime − exif| ≤ tolerance · ⚠️ mismatch · 🚫 no exif (script not run)">✅' +
-    es.synced + " ⚠️" + es.mismatch + " 🚫" + es.no_exif + "</span>";
-  if (exifStats.total) return '<span title="EXIF precompute in progress">scanning ' + exifStats.scanned + "/" + exifStats.total + "…</span>";
+  if (es) return '<span title="EXIF check per album · synced = |mtime − exif| ≤ tolerance · mismatch differs · no exif = script not run · counts: synced/mismatch/no exif">' +
+    '<span class="exif-c ok">' + es.synced + '</span>/' +
+    '<span class="exif-c warn">' + es.mismatch + '</span>/' +
+    '<span class="exif-c none">' + es.no_exif + '</span></span>';
+  if (exifStats.total) return '<span title="EXIF precompute in progress" class="exif-c none">scanning ' + exifStats.scanned + "/" + exifStats.total + "…</span>";
   return "";  // no EXIF data -> no chip at all
 }
 function copyBtn(text) {
@@ -633,6 +638,16 @@ function makeLogPane(key, loader) {
     } catch (e) { pre.textContent = String(e); }
   });
   return det;
+}
+function attachAlbumChrome(el, d, pane, withCopyBtn) {
+  // ONE post-builder pass for every album-ish element: the set-id copy
+  // button (identity modes only - "session" rows carry none) and the logs
+  // button wiring. Keeping it here is what keeps the views uniform.
+  if (withCopyBtn && d.set_id) {
+    const sid = el.querySelector(".n-l1 .stat");
+    if (sid) sid.after(copyBtn(d.set_id));
+  }
+  if (pane) wireLogsBtn(el, pane);
 }
 function wireLogsBtn(container, pane) {
   const btn = container.querySelector(".logs-btn");
@@ -676,7 +691,7 @@ function sessionNode(s, isLast) {
   box.className = "tree-indent";
   const pane = makeLogPane("logs-s" + s.idx, async () =>
     (await (await fetch("/api/session/" + s.idx + "/logs?limit=20000")).json()).lines);
-  wireLogsBtn(sum, pane);
+  attachAlbumChrome(sum, s, pane, false);
   box.appendChild(pane);
   for (let i = 0; i < s.albums.length; i++)
     box.appendChild(albumNode(s, s.albums[i], isLast && i === s.albums.length - 1));
@@ -728,7 +743,7 @@ function albumLinesHtml(d, mode) {
     "</div>";
   const l3 = '<div class="n-l3"><span class="stat">mtime ' +
     ((d.first_mtime || d.max_mtime) ? esc(fmtEpoch(d.first_mtime || d.max_mtime)) : "—") + "</span>" +
-    (d.vanity ? ' <span class="stat" title="vanity id">vanity ' + esc(d.vanity) + "</span>" : "") +
+    (d.vanity && mode !== "session" ? ' <span class="stat" title="vanity id">vanity ' + esc(d.vanity) + "</span>" : "") +
     (exifCountsHtml(d.set_id ? "a." + d.set_id : "") ? " exif " + exifCountsHtml(d.set_id ? "a." + d.set_id : "") : "") +
     (d.noLogs ? "" : ' <button class="logs-btn">📄 logs</button>') + "</div>";
   return l1 + l2 + l3;
@@ -740,12 +755,11 @@ function albumNode(s, a, auto) {
   const sum = document.createElement("summary");
   sum.innerHTML = albumLinesHtml(Object.assign({ detected: a.photos_n }, a), "album");
   det.appendChild(sum);
-  if (a.set_id) sum.querySelector(".n-l1 .stat").after(copyBtn(a.set_id));  // next to the set id
-  const box = document.createElement("div");
-  box.className = "tree-indent";
   const pane = makeLogPane("logs-s" + s.idx + "/a" + a.idx, async () =>
     (await (await fetch("/api/album/" + s.idx + "/" + a.idx + "/logs?limit=20000")).json()).lines);
-  wireLogsBtn(sum, pane);
+  attachAlbumChrome(sum, a, pane, true);
+  const box = document.createElement("div");
+  box.className = "tree-indent";
   box.appendChild(pane);
   const photosBox = document.createElement("div");
   photosBox.className = "photos";
@@ -773,15 +787,15 @@ function albumCardAlbumNode(sd, a) {
   det.id = "ov-s" + sd.session + "-a" + sd.album_idx;
   const sum = document.createElement("summary");
   sum.innerHTML = albumLinesHtml(Object.assign({
-    set_id: a.set_id, name: a.name, link: a.link, vanity: a.vanity,
+    set_id: a.set_id, name: a.name, link: a.link,
     on_disk_size: a.on_disk_size, first_mtime: a.first_mtime, max_mtime: a.max_mtime,
   }, sd, { detected: sd.photos_n, session_idx: sd.session }), "session");
+  const pane = makeLogPane("logs-s" + sd.session + "/a" + sd.album_idx, async () =>
+    (await (await fetch("/api/album/" + sd.session + "/" + sd.album_idx + "/logs?limit=20000")).json()).lines);
+  attachAlbumChrome(sum, sd, pane, false);
   det.appendChild(sum);
   const box = document.createElement("div");
   box.className = "tree-indent";
-  const pane = makeLogPane("logs-s" + sd.session + "/a" + sd.album_idx, async () =>
-    (await (await fetch("/api/album/" + sd.session + "/" + sd.album_idx + "/logs?limit=20000")).json()).lines);
-  wireLogsBtn(sum, pane);
   box.appendChild(pane);
   const photosBox = document.createElement("div");
   photosBox.className = "photos";
@@ -796,11 +810,12 @@ function albumCardAlbumNode(sd, a) {
   });
   return det;
 }
-function exifBadgeHtml(ex) {  // ONE exif badge painter for every view
-  return badge(ex.state, ex.state === "synced" ? "done" : "error",
-    "EXIF DateTimeOriginal interpreted in " + ex.tz + " · mtime " + fmtEpoch(ex.mtime) +
-    (ex.diff_s != null ? " · Δ" + ex.diff_s + "s" : "") + " · state: " + ex.state) +
-    " " + esc(ex.exif || "no exif");
+function exifBadgeHtml(ex) {  // ONE exif painter for every view: discreet colored text
+  const cls = ex.state === "synced" ? "ok" : ex.state === "mismatch" ? "warn" : "none";
+  return '<span class="exif-c ' + cls + '" title="EXIF DateTimeOriginal interpreted in ' +
+    esc(ex.tz) + " · mtime " + fmtEpoch(ex.mtime) +
+    (ex.diff_s != null ? " · Δ" + ex.diff_s + "s" : "") + ' · ' + esc(ex.exif || "no exif") +
+    '">' + esc(ex.state) + "</span>";
 }
 async function exifPaintInto(el, path) {
   const ex = await exifOf(path);
@@ -1072,12 +1087,21 @@ function albumCard(a) {
     detected: a.photos,
     start: sd0.start, end: sdLast.end,
     dur_s: cardDur(a) / 1000,
-    noLogs: true,  // each session row below carries its own logs button
   });
   const h3 = document.createElement("h3");
   h3.innerHTML = albumLinesHtml(hd, "card");
+  // the card header's logs = ALL of this album's sessions' log spans
+  const pane = makeLogPane("logs-album-" + (a.set_id || encodeURIComponent(a.url)), async () => {
+    const all = [];
+    for (const sd of (a.session_details || [])) {
+      const r = await (await fetch("/api/album/" + sd.session + "/" + sd.album_idx + "/logs?limit=20000")).json();
+      all.push(...r.lines);
+    }
+    return all;
+  });
+  attachAlbumChrome(h3, hd, pane, true);
   card.appendChild(h3);
-  if (a.set_id) card.querySelector("h3 .n-l1 .stat").after(copyBtn(a.set_id));
+  card.appendChild(pane);
   for (const sd of (a.session_details || [])) {
     card.appendChild(albumCardAlbumNode(sd, a));
   }
