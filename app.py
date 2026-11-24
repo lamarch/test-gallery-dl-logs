@@ -52,9 +52,11 @@ TS_RE = re.compile(r"^\[([^\]]+)\]")
 PROGRESS_RE = re.compile(r"^\[\d+/\d+\]")
 STARTED_RE = re.compile(r"Starting \w+Job for '(.+)'")  # greedy: URLs may contain '
 SLEEP_RE = re.compile(r"Sleeping ([\d.]+) seconds \(([^)]+)\)")
-WAIT_RE = re.compile(r"Waiting for ([\d.]+) (seconds|minutes|hours) until (\d{2}:\d{2}:\d{2})(?: \(([^)]+)\))?")
+WAIT_RE = re.compile(
+    r"Waiting for (?:(\d+(?:\.\d+)?) (seconds|minutes|hours)|(\d+)h(?: *(\d+)min)?)"
+    r" until (\d{2}:\d{2}:\d{2})(?: \(([^)]+)\))?")
 DOWNLOAD_RE = re.compile(r"Adjusting filename extension of '([^']+)'")
-FAILED_RE = re.compile(r"Failed to download '([^']+)'")
+FAILED_RE = re.compile(r"Failed to download ['\"]?([^'\"]+)['\"]?\s*$")
 VERSION_RE = re.compile(r"\[gallery-dl\]\[debug\] Version ")
 PHOTO_GET_RE = re.compile(r'"GET /photo/\?fbid=(\d+)')
 RESP_RE = re.compile(r'"(?:GET|POST) [^"]+ HTTP/1\.1" (\d{3})(?: (\d+))?')
@@ -78,6 +80,7 @@ REJECTION_PATTERN = (
     r"|ChallengeError|[Cc]aptcha|FunCaptcha|GeeTest|hCaptcha"
     r"|HttpError: '(?:401|403|429)"
     r"|content isn't available"
+    r"|photo download URL for .+\. Skipping"  # url extraction blocked permanently
 )
 REJECTION_RE = re.compile(r"(?i)" + REJECTION_PATTERN)
 
@@ -398,6 +401,13 @@ def _album_link(url, set_id):
     return url
 
 
+def _wait_secs(m):
+    "Seconds from a WAIT_RE match (single unit or the combined '2h 5min')."
+    if m.group(1):
+        return float(m.group(1)) * {"seconds": 1, "minutes": 60, "hours": 3600}[m.group(2)]
+    return float(m.group(3)) * 3600 + float(m.group(4) or 0) * 60
+
+
 def _update_photo_node(p, line):
     """Match one log line against an in-progress photo node `p` (may be None:
     the caller then only gets the accounting return values). Updates p's
@@ -438,8 +448,8 @@ def _update_photo_node(p, line):
             p["sleep"] += secs
     wm = WAIT_RE.search(line)
     if wm:
-        secs = float(wm.group(1)) * {"seconds": 1, "minutes": 60, "hours": 3600}[wm.group(2)]
-        reason = wm.group(4) or "waiting"
+        secs = _wait_secs(wm)
+        reason = wm.group(6) or "waiting"
         if p is not None:
             p["sleep"] += secs
     return payload, is_media, secs, reason
@@ -1351,9 +1361,9 @@ def stats():
         if w:
             ts = TS_RE.match(line)
             # "Waiting for 15 minutes until HH:MM:SS (429 Too Many Requests)"
-            mult = {"seconds": 1, "minutes": 60, "hours": 3600}[w.group(2)]
-            last_sleep = {"seconds": float(w.group(1)) * mult,
-                          "reason": w.group(4) or "waiting",
+            # or the combined unit: "Waiting for 2h 5min until HH:MM:SS (...)"
+            last_sleep = {"seconds": _wait_secs(w),
+                          "reason": w.group(6) or "waiting",
                           "at": ts.group(1) if ts else ""}
         m = LEVEL_RE.match(line)
         if m:
@@ -1368,6 +1378,8 @@ def stats():
             pass
         elif line[:1] in (" ", "\t"):
             pass  # indented traceback continuation lines are not downloads
+        elif "][" not in line and not line.startswith("["):
+            pass  # continuation lines of multi-line messages are not downloads
         else:
             counts["downloads"] += 1
     cur_set = None

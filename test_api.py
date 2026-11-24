@@ -636,6 +636,95 @@ class RejectionRecoveryTests(unittest.TestCase):
         self.assertEqual(o["rejections_unresolved"], 0)
 
 
+class FacebookLogCasesTests(unittest.TestCase):
+    """Every log line gallery-dl 1.32.21's Facebook path can emit - source-
+    audited from facebook.py, job.py, extractor common.py (wait/sleep) and
+    downloader/http.py of the v1.32.21 tag."""
+
+    def setUp(self):
+        from fastapi.testclient import TestClient
+        self.client = TestClient(app)
+        self._orig = open(LOG_FILE, encoding="utf-8").read()
+        GET = ('[2026-12-01 10:00:0%d] [urllib3.connectionpool][debug] '
+               'https://www.facebook.com:443 "GET /photo/?fbid=%s&set=a.%s HTTP/1.1" 200 None')
+        lines = [
+            "[2026-12-01 10:00:00] [gallery-dl][debug] Version 1.32.21",
+            "[2026-12-01 10:00:01] [gallery-dl][debug] Using FacebookSetExtractor for '" + SET_URL + "'",
+            "[2026-12-01 10:00:02] [gallery-dl][debug] Starting DownloadJob for '" + SET_URL + "'",
+            GET % (3, "100", SET_ID),
+            # followups found in comments: logged (debug), fetched later
+            "[2026-12-01 10:00:04] [facebook][debug] Found a followup in comments: 101",
+            # url extraction blocked permanently -> Skipping (error),
+            # emitted BEFORE the next photo page is fetched
+            "[2026-12-01 10:00:05] [facebook][error] Failed to find photo download URL for "
+            "https://www.facebook.com/photo/?fbid=100&set=a." + SET_ID + ". Skipping.",
+            GET % (6, "101", SET_ID),
+            # url extraction failed once -> Retrying (warning) + 429 wait (info)
+            "[2026-12-01 10:00:07] [facebook][warning] Failed to find photo download URL for "
+            "https://www.facebook.com/photo/?fbid=101&set=a." + SET_ID + ". Retrying in 900.0 seconds.",
+            "[2026-12-01 10:00:08] [facebook][info] Waiting for 15 minutes until "
+            "10:15:08 (429 Too Many Requests)",
+            # combined-hours wait variant ("2h 5min")
+            "[2026-12-01 10:16:00] [facebook][info] Waiting for 2h 5min until 12:21:00 (rate limit)",
+            # download failure: 1.32.21 logs the filename WITHOUT quotes
+            "[2026-12-01 10:17:00] [downloader.http][error] "
+            "Failed to download 20261201_101700_101.avif",
+            # anti-bot abort: multi-line message + non-prefixed continuation lines
+            "[2026-12-01 10:17:01] [facebook][error] "
+            "You've been temporarily blocked from viewing images.",
+            "Please try using a different account, using a VPN or waiting before you retry.",
+            'You can use this URL to continue from where you left off (added "&setextract"): ',
+            "https://www.facebook.com/photo/?fbid=101&set=a." + SET_ID + "&setextract",
+            "[2026-12-01 10:18:00] [facebook][debug] Can't find next image in the set. Extraction is over.",
+            "[2026-12-01 10:18:01] [facebook][info] Detected jump to the beginning of the set. (101 -> 1)",
+            # the retry succeeded: CDN payload for photo 101
+            '[2026-12-01 10:19:00] [urllib3.connectionpool][debug] '
+            'https://scontent.xx.fbcdn.net:443 "GET /v/t34/1.jpg HTTP/1.1" 200 54321',
+        ]
+        with open(LOG_FILE, "w", encoding="utf-8") as f:
+            f.write("\n".join(lines) + "\n")
+
+    def tearDown(self):
+        with open(LOG_FILE, "w", encoding="utf-8") as f:
+            f.write(self._orig)
+
+    def test_tree_photos_and_rejections(self):
+        t = self.client.get("/api/tree").json()
+        a = t["sessions"][0]["albums"][0]
+        self.assertEqual(a["photos_n"], 2)             # followup included
+        p0, p1 = a["photos"]
+        self.assertTrue(p0["rejected"])               # "Skipping" marks the photo
+        self.assertEqual(p0["state"], "rejected")
+        self.assertFalse(p0["dl"])
+        self.assertTrue(p1["rejected"])               # the multi-line anti-bot msg
+        self.assertTrue(p1["dl"])                     # recovered on the retry
+        self.assertEqual(p1["state"], "rejected")     # rejected mark kept
+        self.assertEqual(a["rejections"], 3)           # Skipping + 429 wait + blocked
+        self.assertEqual(a["rejections_unresolved"], 1)  # photo 100 never recovered
+        self.assertEqual(a["status"], "banned")       # -> album stays banned
+        self.assertEqual(a["errors"], 3)
+        # 1.32.21 unquoted "Failed to download" still sets the raw status
+        self.assertEqual(p1["status"], "downloaded")  # later CDN payload wins
+
+    def test_wait_units_and_wake(self):
+        ls = self.client.get("/api/stats").json()["last_sleep"]
+        self.assertEqual(ls["seconds"], 7500.0)       # 2h 5min
+        self.assertEqual(ls["reason"], "rate limit")
+        self.assertEqual(ls["at"], "2026-12-01 10:16:00")
+        wake = self.client.get("/api/summary").json()["wake_epoch"]
+        self.assertAlmostEqual(wake, datetime(2026, 12, 1, 10, 16,
+                                              tzinfo=timezone.utc).timestamp() + 7500)
+
+    def test_counts_not_polluted_by_continuations(self):
+        st = self.client.get("/api/stats").json()
+        # the 4 continuation lines of the multi-line messages are not downloads
+        self.assertEqual(st["downloads"], 0)
+        self.assertEqual(st["errors"], 3)
+        self.assertEqual(st["warnings"], 1)           # the "Retrying in" warning
+        self.assertEqual(st["rejections"], 3)
+        self.assertEqual(st["files"], 1)              # the CDN payload
+
+
 class FilesApiTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
