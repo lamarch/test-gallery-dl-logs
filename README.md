@@ -91,7 +91,10 @@ at every `[gallery-dl][debug] Version ...` line, so restarts/power cuts are visi
 Only the most recent session/album auto-expands. The tree loads when the tab is opened
 and updates via its **Refresh** button (expanded
 nodes and scroll position are preserved) and has a **filter box** (album name / set id /
-fbid). Each node (session / album / photo) renders 3 lines:
+fbid). Each node (session / album / photo) renders 3 lines - the **session header
+flows through the same template as the Albums-view session rows**, so counters,
+errors/rejections chips, mtime, the EXIF summary (shown when the session touches
+a single album set) and the logs button can no longer diverge between views:
 - **Line 1**: icon + name (album names link to the album's card via
   `#album=<set_id>`) + status badge with a tooltip (`done` = `#` in albums.txt) +
   `facebook` link + set id (number only) + **copy-ID button** + start -> end +
