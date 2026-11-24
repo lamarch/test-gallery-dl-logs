@@ -493,9 +493,11 @@ function updateBanner(s) {
     " remaining · " + al.total + " total (" + al.done + " done)";
   if (s.last_sleep) {
     const wake = s.wake_epoch ? fmtEpoch(s.wake_epoch) : "—";
-    const elapsed = s.wake_epoch && s.wake_epoch * 1000 < Date.now();
-    SB["sb-sleep"].textContent = "💤 sleeping " + s.last_sleep.seconds + "s (" + s.last_sleep.reason +
-      ") — wakes " + wake + (elapsed ? " (elapsed)" : "");
+    const left = s.wake_epoch ? s.wake_epoch - Date.now() / 1000 : null;
+    SB["sb-sleep"].textContent = "💤 sleeping " + fmtDur(s.last_sleep.seconds) + " (" + s.last_sleep.reason +
+      ") — wakes " + wake +
+      (left != null && left > 0 ? " · ⏳ " + fmtDur(left) + " left" : "") +
+      (left != null && left <= 0 ? " (elapsed)" : "");
   } else {
     SB["sb-sleep"].textContent = "▶ working";
   }
@@ -824,7 +826,7 @@ function photoRow(s, a, p, setId) {
     ' <span class="stat">' + esc(fmtTs(p.ts)) + "</span> " +
     stateBadge(st) + "</div>" +
     '<div class="n-l2"><span class="stat">' + esc(shownName || "—") + "</span>" +
-    ' <span class="cnt" title="Sleep time attributed to this photo (sleep-download lines)">💤 <b>' + (p.sleep || 0).toFixed(1) + "s</b></span>" +
+    ' <span class="cnt" title="Sleep time attributed to this photo (sleep-download lines)">💤 <b>' + fmtDur(p.sleep || 0) + "</b></span>" +
     ' <span class="cnt" title="Bytes of CDN payloads for this photo">💾 <b>' + humanSize(p.bytes) + "</b></span>" +
     (linkPhoto ? ' <a class="cnt" href="' + esc(linkPhoto) + '" target="_blank" rel="noopener" title="Open this photo in Facebook (browser link)">🔗 FB</a>' : "") +
     (p.path ? ' <a class="cnt" href="#file=' + encodeURIComponent(p.path) + '" title="Open the Files view filtered on this file">📂 #file</a>' : "") +
