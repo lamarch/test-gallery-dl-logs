@@ -88,7 +88,8 @@ albums overview + disk index as a downloadable attachment).
 ### Tree - session -> album -> photo, 3 lines per node
 The log is parsed into a tree. **Each run = one session branch** (a new branch starts
 at every `[gallery-dl][debug] Version ...` line, so restarts/power cuts are visible).
-Only the most recent session/album auto-expands. The tree **live-refreshes** (expanded
+Only the most recent session/album auto-expands. The tree loads when the tab is opened
+and updates via its **Refresh** button (expanded
 nodes and scroll position are preserved) and has a **filter box** (album name / set id /
 fbid). Each node (session / album / photo) renders 3 lines:
 - **Line 1**: icon + label (Session #N / album name + `a.<id>` / photo fbid) + a
@@ -250,7 +251,8 @@ skip) or when the file was already there from a previous run.
   raw parsed status, and gets the explicit state `already` / `interrupted` from the rules
   above once the disk index is crossed.
 - The Tree tab auto-expands only the **most recent** session and album; everything
-  else stays collapsed. Tree and Albums live-refresh every 5 s while open, preserving
+  else stays collapsed. Tree and Albums refresh when the tab is opened or via their Refresh
+  button (no background auto-refresh), preserving
   expanded nodes and scroll. Browser back/forward works across tabs and
   `#album=<set_id>` / `#file=<path>` permalinks (History API).
 

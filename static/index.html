@@ -147,6 +147,7 @@ select{background:#fff;border:1px solid #ced4da;color:var(--fg);border-radius:.3
 <div id="view-tree" class="view">
   <div class="controls">
     <input id="tree-q" type="search" placeholder="Filter tree (album name, set id, fbid)…">
+    <button id="tree-refresh">Refresh</button>
     <span id="tree-count" class="stat"></span>
   </div>
   <div id="tree-root"></div>
@@ -154,6 +155,7 @@ select{background:#fff;border:1px solid #ced4da;color:var(--fg);border-radius:.3
 <div id="view-albums" class="view">
   <div class="controls">
     <input id="albums-q" type="search" placeholder="Filter albums (name, set id, url)…">
+    <button id="albums-refresh">Refresh</button>
   </div>
   <div id="albums-compare"></div>
   <div id="albums-root"></div>
@@ -499,13 +501,13 @@ let treeSig = null;
 function treeSignature(t, ex) {  // only the data that is actually rendered
   return JSON.stringify(t) + "|" + JSON.stringify(ex && ex.by_album);
 }
-// scroll preservation across live refreshes: reopened nodes load their content
+// scroll preservation across refreshes: reopened nodes load their content
 // asynchronously (photos / log spans), which grows the page AFTER the first
 // restore - so we re-apply the saved scroll when that content settles.
 let scrollRestore = null;
 function applyScrollRestore() { if (scrollRestore) scrollRestore.view.scrollTop = scrollRestore.value; }
 // content caches: reopened nodes repaint INSTANTLY from cache (no empty flash
-// on live refresh); a background fetch then updates the cache and only repaints
+// on refresh); a background fetch then updates the cache and only repaints
 // if the data actually changed.
 const photosCache = {};  // "s/a" -> { set_id, photos_n, photos: [...], painted: sig }
 const spanCache = {};    // "logs-..." -> joined raw log lines
@@ -668,7 +670,7 @@ function albumNode(s, a, auto) {
     if (!det.open || loaded) return;
     loaded = true;
     // expanding an album also expands its photos; repaint instantly from cache
-    // so the 5 s live refresh does not empty the node, then refresh in background
+    // so a refresh does not empty the node, then refresh in background
     if (photosCache[s.idx + "/" + a.idx]) paintPhotos(s.idx, a.idx, photosBox);
     loadPhotos(s.idx, a.idx, photosBox, 0);
   });
@@ -765,7 +767,7 @@ function renderTree() {
   const t = treeData;
   if (!t) return;
   const view = $("view-tree"), root = $("tree-root");
-  // preserve expanded nodes + scroll across live refreshes
+  // preserve expanded nodes + scroll across refreshes
   const openKeys = new Set([...root.querySelectorAll("details.tnode[data-key]")]
     .filter(d => d.open).map(d => d.dataset.key));
   const scroll = view.scrollTop;
@@ -787,6 +789,7 @@ function applyTreeFilter(q) {
     el.classList.toggle("hidden", !!q && !el.textContent.toLowerCase().includes(q));
 }
 $("tree-q").addEventListener("input", () => applyTreeFilter($("tree-q").value.trim().toLowerCase()));
+$("tree-refresh").addEventListener("click", () => refreshTree());
 
 // ---------------------------------------------------------------- albums view (3-way comparison + cards)
 let overviewData = null, compareData = null, overviewLoading = false, overviewSig = null;
@@ -924,6 +927,7 @@ function applyAlbumsFilter(q) {
     el.classList.toggle("hidden", !!q && !el.textContent.toLowerCase().includes(q));
 }
 $("albums-q").addEventListener("input", () => applyAlbumsFilter($("albums-q").value.trim().toLowerCase()));
+$("albums-refresh").addEventListener("click", () => refreshOverview());
 
 // ---------------------------------------------------------------- files view
 let filesData = null;
@@ -1090,8 +1094,8 @@ async function poll() {
       rejBanner.style.display = "none";
       if (onlyRej) { onlyRej = false; rejBanner.classList.remove("active"); refilter(); }
     }
-    if (tab === "tree") refreshTree();       // live refresh, expanded nodes + scroll preserved
-    else if (tab === "albums") refreshOverview();
+    // tree/albums do NOT auto-refresh: they reload when the tab is opened or
+    // via their Refresh button (same pattern as the Files tab)
   } catch (e) {}
   setTimeout(poll, 5000);
 }
