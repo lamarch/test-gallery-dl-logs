@@ -1,4 +1,3 @@
-<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
@@ -37,16 +36,11 @@ label.lvl{display:flex;gap:4px;align-items:center;color:var(--muted);font-size:1
 #rej-banner{display:none;color:var(--error);font-weight:600;cursor:pointer;
   padding:2px 10px;border:1px solid var(--error);border-radius:2rem;font-size:12px;background:#fff}
 #rej-banner.active{background:#f8d7da}
-#statusbar{display:flex;flex-wrap:wrap;gap:8px;padding:8px 16px;background:var(--panel);
-  border-bottom:1px solid var(--border)}
-.chip{background:#e9ecef;border:1px solid var(--border);border-radius:2rem;
-  padding:4px 12px;font-size:13px;color:#495057}
-.chip b{color:var(--fg)}
-.chip.ok{border-color:var(--ok);background:#d1e7dd;color:#0f5132}
-.chip.warn{border-color:#ffc107;background:#fff3cd;color:#664d03}
-.chip.err{border-color:var(--error);background:#f8d7da;color:#842029}
-.chip.clickable{cursor:pointer}
-.chip.clickable:hover{border-color:var(--blue)}
+#statusbar{background:var(--panel);border-bottom:1px solid var(--border);padding:6px 16px;
+  display:flex;flex-direction:column;gap:3px}
+.sb-line{display:flex;flex-wrap:wrap;gap:5px;font-size:13px}
+.sb-part{background:#e9ecef;border:1px solid var(--border);border-radius:2rem;padding:2px 10px;white-space:nowrap}
+.sb-part b{color:var(--fg)}
 #notice{display:none;padding:6px 16px;background:#cff4fc;color:#055160;
   border-bottom:1px solid var(--border);font-size:13px}
 #paused{display:none;padding:6px 16px;background:#fff3cd;color:#664d03;
@@ -69,29 +63,39 @@ summary:hover{background:#e9ecef}
 .badge{display:inline-block;padding:.15em .6em;border-radius:.375rem;font-size:11px;font-weight:600;border:1px solid transparent;white-space:nowrap}
 .badge.done,.badge.downloaded{color:#fff;background:var(--ok);border-color:var(--ok)}
 .badge.banned,.badge.error,.badge.failed{color:#fff;background:var(--error);border-color:var(--error)}
-.badge.incomplete,.badge.missing_on_disk{color:#664d03;background:#ffc107;border-color:#ffc107}
-.badge.retried,.badge.on_disk_only{color:#fff;background:var(--blue);border-color:var(--blue)}
-.badge.pending{color:#fff;background:#6c757d;border-color:#6c757d}
+.badge.incomplete,.badge.missing{color:#664d03;background:#ffc107;border-color:#ffc107}
+.badge.retried,.badge.already,.badge.not_in_file{color:#fff;background:var(--blue);border-color:var(--blue)}
+.badge.pending,.badge.foreign,.badge.interrupted{color:#fff;background:#6c757d;border-color:#6c757d}
+.badge.running{color:#084298;background:#cfe2ff;border-color:#b6d4fe}
 .stat{color:var(--muted);font-size:12px}
 .stat b{color:var(--fg)}
 .tree-indent{margin-left:18px;border-left:2px solid var(--border);padding-left:10px}
-.photo-row{padding:2px 8px;border-radius:.375rem}
-.photo-row:hover{background:#e9ecef}
+.tnode.hidden{display:none}
+.n-l1{font-weight:500}
+.n-l2,.n-l3{font-size:12px;color:var(--muted);display:flex;flex-wrap:wrap;gap:4px 10px;align-items:center;font-weight:400}
+.n-l2 b,.n-l3 b{color:var(--fg)}
+.cnt{white-space:nowrap}
+a.cnt{text-decoration:none}
+.photo{padding:4px 8px;border-radius:.375rem}
+.photo:hover{background:#f1f3f5}
+.copy-btn{padding:0 6px;font-size:11px;line-height:1.5;margin-left:2px}
+.logs-btn{font-size:11px;padding:1px 8px}
+.more-btn{margin:6px 0;font-size:12px}
+.thumb40{width:40px;height:40px;object-fit:cover;border-radius:.375rem;border:1px solid var(--border);vertical-align:middle;margin-right:6px}
 .thumb{width:56px;height:56px;object-fit:cover;border-radius:.375rem;border:1px solid var(--border);vertical-align:middle;margin-right:8px}
+.logpane{max-height:300px;overflow:auto;background:var(--bg);padding:6px;border-radius:6px;
+  font:12px/1.5 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;white-space:pre-wrap;word-break:break-all}
 .files-table{width:100%;border-collapse:collapse;background:#fff;border:1px solid var(--border);border-radius:.5rem}
-.files-table td{padding:6px 10px;border-bottom:1px solid var(--border);vertical-align:middle;font-size:13px}
+.files-table td,.files-table th{padding:6px 10px;border-bottom:1px solid var(--border);vertical-align:middle;font-size:13px;text-align:left}
 .files-table tr:hover{background:#f1f3f5}
+tr.hl{background:#fff3cd !important}
 .controls{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-bottom:10px}
 select{background:#fff;border:1px solid #ced4da;color:var(--fg);border-radius:.375rem;padding:.375rem .75rem;font:inherit}
 .card{background:var(--panel);border:1px solid var(--border);border-radius:.5rem;padding:12px 16px;margin-bottom:12px;box-shadow:0 1px 2px rgba(16,24,40,.05)}
 .card h3{margin:0 0 8px 0;font-size:16px}
-
-.keystats{white-space:nowrap;margin-right:6px}
-.kpi{font-size:15px;font-weight:700;color:var(--fg)}
-.kpi.ok{color:var(--ok)}
-.pbar{display:inline-block;width:110px;height:14px;background:#e9ecef;border:1px solid var(--border);border-radius:2rem;position:relative;overflow:hidden;vertical-align:middle;margin-right:8px}
-.pbar-fill{position:absolute;left:0;top:0;bottom:0;background:var(--ok)}
-.pbar-txt{position:absolute;inset:0;text-align:center;font-size:10px;line-height:13px;font-weight:700;color:#212529}
+.compare-table{margin-bottom:16px}
+.compare-table th{color:var(--muted);font-size:12px}
+.acmp.hidden{display:none}
 </style>
 </head>
 <body>
@@ -103,7 +107,7 @@ select{background:#fff;border:1px solid #ced4da;color:var(--fg);border-radius:.3
     <button id="tab-albums">Albums</button>
     <button id="tab-files">Files</button>
   </div>
-  <span id="rej-banner" title="scraping rejections detected in the log"></span>
+  <span id="rej-banner" title="Scraping rejections detected in the log — click to jump to the first rejection line in the Log tab"></span>
   <a href="/api/export" download="web-dashboard-export.json"><button>⬇ Export JSON</button></a>
   <div id="stats">
     <span id="dot" title="stream connection"></span>
@@ -114,7 +118,11 @@ select{background:#fff;border:1px solid #ced4da;color:var(--fg);border-radius:.3
     <span id="st-path"></span>
   </div>
 </header>
-<div id="statusbar"></div>
+<div id="statusbar">
+  <div class="sb-line" id="sb-l1"></div>
+  <div class="sb-line" id="sb-l2"></div>
+  <div class="sb-line" id="sb-l3"></div>
+</div>
 <div id="view-log" class="view open">
   <div class="controls">
     <input id="search" type="search" placeholder="Search logs…">
@@ -126,7 +134,7 @@ select{background:#fff;border:1px solid #ced4da;color:var(--fg);border-radius:.3
     <label class="lvl"><input type="checkbox" class="cb" data-lvl="other" checked>other</label>
     <button id="btn-view-raw" class="active">Raw</button>
     <button id="btn-view-parsed">Parsed</button>
-    <button id="btn-earlier" disabled>⤒ Load earlier</button>
+    <button id="btn-earlier" disabled>⏒ Load earlier</button>
     <button id="btn-pause">⏸ Pause</button>
     <button id="btn-scroll" class="active">↓ Auto-scroll</button>
     <button id="btn-clear">Clear</button>
@@ -136,17 +144,31 @@ select{background:#fff;border:1px solid #ced4da;color:var(--fg);border-radius:.3
   <div id="paused"></div>
   <div id="log"></div>
 </div>
-<div id="view-tree" class="view"></div>
-<div id="view-albums" class="view"></div>
+<div id="view-tree" class="view">
+  <div class="controls">
+    <input id="tree-q" type="search" placeholder="Filter tree (album name, set id, fbid)…">
+    <span id="tree-count" class="stat"></span>
+  </div>
+  <div id="tree-root"></div>
+</div>
+<div id="view-albums" class="view">
+  <div class="controls">
+    <input id="albums-q" type="search" placeholder="Filter albums (name, set id, url)…">
+  </div>
+  <div id="albums-compare"></div>
+  <div id="albums-root"></div>
+</div>
 <div id="view-files" class="view">
   <div class="controls">
     <select id="files-album"><option value="">all albums</option></select>
     <select id="files-state">
-      <option value="all">all states</option>
+      <option value="all">all files</option>
+      <option value="full">full (downloaded in logs + on disk)</option>
+      <option value="already">already (page seen in logs, skipped)</option>
+      <option value="foreign">foreign (on disk, never in logs)</option>
       <option value="synced">exif synced</option>
       <option value="mismatch">exif mismatch</option>
-      <option value="no_exif">script not run (no exif)</option>
-      <option value="not_in_log">not in logs (extra on disk)</option>
+      <option value="no_exif">no exif (script not run)</option>
     </select>
     <input id="files-q" type="search" placeholder="name / fbid…">
     <button id="files-refresh">Rescan disk</button>
@@ -159,13 +181,12 @@ select{background:#fff;border:1px solid #ced4da;color:var(--fg);border-radius:.3
 const $ = (id) => document.getElementById(id);
 const logEl = $("log"), searchEl = $("search"), searchCount = $("search-count");
 const pausedEl = $("paused"), noticeEl = $("notice"), dot = $("dot"), rejBanner = $("rej-banner");
-const statusbar = $("statusbar"), earlierBtn = $("btn-earlier");
+const earlierBtn = $("btn-earlier");
 const INITIAL_TAIL = 1000;
 let MAX_NODES = 20000, offset = 0, firstOffset = 0, hasMore = false;
 let paused = false, pending = [], autoScroll = true, onlyRej = false;
 let viewMode = "raw", allLines = [], searchTimer = null;
 let tab = "log";
-let lastChipsHtml = "";
 
 const LEVEL_RE = /^(?:\[[^\]]*\]\s*)?\[[^\]]*\]\[(debug|info|warning|error|critical)\]/;
 const PROGRESS_RE = /^\[\d+\/\d+\]/;
@@ -196,6 +217,7 @@ function humanSize(n) {
 }
 function trunc(s, n) { s = String(s); return s.length > n ? s.slice(0, n - 1) + "…" : s; }
 function esc(s) { const d = document.createElement("div"); d.textContent = s; return d.innerHTML.replace(/"/g, "&quot;").replace(/'/g, "&#39;"); }
+function qsel(s) { return String(s).replace(/\\/g, "\\\\").replace(/"/g, '\\"'); }
 // log timestamps are UTC ("YYYY-MM-DD HH:MM:SS"); display them in DISPLAY_TZ
 let TZ = "UTC";
 let tzFmt = null;
@@ -215,6 +237,19 @@ function fmtTs(s) {
   const d = new Date(String(s).slice(0, 19).replace(" ", "T") + "Z");
   return isNaN(d.getTime()) ? String(s) : tzFormatter().format(d);
 }
+function tsEpoch(s) {
+  if (!s) return NaN;
+  return Date.parse(String(s).slice(0, 19).replace(" ", "T") + "Z");
+}
+function fmtDur(sec) {
+  if (sec == null || !isFinite(sec)) return "";
+  sec = Math.max(0, Math.round(sec));
+  const h = Math.floor(sec / 3600), m = Math.floor((sec % 3600) / 60), s = sec % 60;
+  const p = (n) => String(n).padStart(2, "0");
+  if (h) return h + "h" + p(m) + "m" + p(s) + "s";
+  if (m) return m + "m" + p(s) + "s";
+  return s + "s";
+}
 function parseEvent(line) {
   const m = TS_RE.exec(line);
   const ts = m ? m[1] : "";
@@ -231,7 +266,7 @@ function parseEvent(line) {
   else if (msg.match(/^Failed to download '/)) { icon = "❌"; }
   else if (/^Starting new HTTPS connection/.test(msg)) { icon = "🔌"; }
   else if (/^Resetting dropped connection/.test(msg)) { icon = "🔁"; }
-  else if (/^Version /.test(msg)) { icon = "🔄"; text = msg; }
+  else if (/^Version /.test(msg)) { icon = "📦"; text = msg; }
   else icon = { debug: "·", info: "ℹ", warning: "⚠", error: "✖" }[lvl] || "•";
   return { ts, lvl, icon, text };
 }
@@ -258,12 +293,13 @@ function makeDiv(line) {
   if (!isVisible(div)) div.classList.add("hidden");
   return div;
 }
+function scrollLogEnd() { const v = $("view-log"); v.scrollTop = v.scrollHeight; }
 function appendLine(line) {
   allLines.push(line);
   if (allLines.length > MAX_NODES) allLines.shift();
   logEl.appendChild(makeDiv(line));
   while (logEl.childElementCount > MAX_NODES) logEl.firstChild.remove();
-  if (autoScroll && !paused) logEl.scrollTop = logEl.scrollHeight;
+  if (autoScroll && !paused) scrollLogEnd();
 }
 function prependLines(lines) {
   allLines = lines.concat(allLines);
@@ -311,6 +347,7 @@ async function loadHistory() {
       noticeEl.textContent = "Display capped at " + MAX_NODES + " lines. Use \"Load earlier\" or search (match count covers the scanned file).";
     }
     offset = data.offset;
+    scrollLogEnd();  // the log view opens scrolled at the END of the file
   } catch (e) { /* no log yet */ }
   connect();
 }
@@ -335,250 +372,500 @@ function toggleView(mode) {
   const frag = document.createDocumentFragment();
   for (const line of allLines) frag.appendChild(makeDiv(line));
   logEl.appendChild(frag);
-  if (autoScroll) logEl.scrollTop = logEl.scrollHeight;
+  if (autoScroll) scrollLogEnd();
 }
 function refilter() {
   for (const el of logEl.children) el.classList.toggle("hidden", !isVisible(el));
 }
 
-// ---------------------------------------------------------------- tabs
+// ---------------------------------------------------------------- tabs + history (hash)
+let pendingAlbum = null, pendingFile = null;
+function hashState() {
+  const h = location.hash;
+  if (h.startsWith("#file=")) return { tab: "files", file: decodeURIComponent(h.slice(6)) };
+  if (h.startsWith("#album=")) return { tab: "albums", album: decodeURIComponent(h.slice(7)) };
+  if (["#log", "#tree", "#albums", "#files"].includes(h)) return { tab: h.slice(1) };
+  return { tab: "log" };
+}
 function showTab(name) {
   tab = name;
   for (const t of ["log", "tree", "albums", "files"]) {
     $("tab-" + t).classList.toggle("active", t === name);
     $("view-" + t).classList.toggle("open", t === name);
   }
-  if (name === "tree") loadTree();
-  if (name === "albums") loadOverview();
-  if (name === "files") loadFiles();
-}
-for (const t of ["log", "tree", "albums", "files"])
-  $("tab-" + t).addEventListener("click", () => goTab(t));
-
-// ---------------------------------------------------------------- tree view
-async function loadTree() {
-  try {
-    const t = await (await fetch("/api/tree")).json();
-    renderTree(t);
-  } catch (e) {}
-}
-function badge(txt, cls, title) { return '<span class="badge ' + cls + '"' + (title ? ' title="' + esc(title) + '"' : "") + '>' + esc(txt) + "</span>"; }
-function statsLine(o) {
-  const pn = o.photos_n != null ? o.photos_n : (o.photos || 0);  // overview entries use "photos"
-  return '<span class="stat">'
-    + '<span title="Pages photo vues dans les logs (lignes GET /photo/?fbid=…)">🖼 <b>' + pn + '</b> photos (log)</span> · '
-    + '<span title="Téléchargements effectifs vus dans les logs : réponses HTTP < 400 avec octets sur le CDN (fbcdn.net)">📥 <b>' + o.files + '</b> downloaded (log)</span> · '
-    + '<span title="Volume téléchargé (somme des octets des payloads CDN)">💾 <b>' + humanSize(o.bytes) + '</b></span> · '
-    + '<span title="Temps de sommeil cumulé (sleep-request / download / extractor…)">💤 <b>' + o.sleeps.toFixed(1) + 's</b> sleep</span>'
-    + (o.on_disk != null ? ' · <span title="Fichiers physiquement présents sur le disque (match par fbid), indépendamment des logs">💽 <b>' + o.on_disk + '</b> on disk (disk)</span>' : '')
-    + (o.missing_on_disk ? ' · <span title="Téléchargées selon les logs mais absentes du disque">⚠ <b>' + o.missing_on_disk + '</b> missing</span>' : '')
-    + (o.errors ? ' · <span title="Lignes [error]/[critical] dans les logs">✖ <b>' + o.errors + '</b></span>' : '')
-    + (o.rejections ? ' · <span title="Rejets anti-scraping détectés dans les logs (429/ban/captcha…)">🚫 <b>' + o.rejections + '</b></span>' : '')
-    + '</span>';
-}
-function stateLine(st) {
-  if (!st) return "";
-  const order = [["downloaded", "💾", "Téléchargée selon les logs ET présente sur le disque"],
-    ["on_disk_only", "📁", "Présente sur le disque sans ligne de téléchargement dans les logs (déjà existante / run précédent)"],
-    ["missing_on_disk", "⚠️", "Téléchargée selon les logs mais absente du disque"],
-    ["failed", "❌", "Erreur de téléchargement (anti-bot, HTTP…) et absente du disque"],
-    ["pending", "⏳", "Page vue, rien de téléchargé, pas sur disque"]];
-  return order.filter(([k]) => st[k]).map(([k, ic, ti]) => ic + " " + badge(k, k, ti) + " <b>" + st[k] + "</b>").join(" ");
-}
-function progressBar(done, total) {
-  const pct = total > 0 ? Math.min(100, Math.round(100 * done / total)) : 0;
-  return '<span class="pbar" title="' + done + ' / ' + total + ' = ' + pct + '%"><span class="pbar-fill" style="width:' + pct + '%"></span><span class="pbar-txt">' + pct + '%</span></span>';
-}
-function keyStats(o) {
-  const pn = o.photos_n != null ? o.photos_n : (o.photos || 0);  // overview entries use "photos"
-  const done = o.on_disk != null ? o.on_disk : o.files;
-  return '<span class="keystats">' + progressBar(done, pn)
-    + ' <span class="kpi" title="pages photo vues dans les logs (GET /photo/?fbid=…)">' + pn + ' photos</span>'
-    + (o.on_disk != null ? ' <span class="kpi ok" title="fichiers présents sur le disque (match par fbid)">' + o.on_disk + ' on disk</span>' : '')
-    + ' <span class="kpi" title="téléchargés vus dans les logs (payload CDN, HTTP < 400 + octets)">' + o.files + ' dl</span>'
-    + '</span>';
-}
-function renderTree(t) {
-  const el = $("view-tree");
-  el.innerHTML = "";
-  if (!t.sessions.length) { el.innerHTML = "<p class='stat'>no sessions parsed yet</p>"; return; }
-  const lastSession = t.sessions[t.sessions.length - 1];
-  for (const s of t.sessions) {
-    const det = document.createElement("details");
-    det.open = s === lastSession;  // auto-expand only the most recent session
-    const sum = document.createElement("summary");
-    sum.innerHTML = "🔄 <b>session #" + s.idx + "</b> — started " + fmtTs(s.start) +
-      " → " + fmtTs(s.end) + " &nbsp;" + keyStats(s) + ' <span class="stat">' + statsLine(s) + "</span>";
-    det.appendChild(sum);
-    const box = document.createElement("div");
-    box.className = "tree-indent";
-    const lastAlbum = s.albums[s.albums.length - 1];
-    for (const a of s.albums) {
-      const ad = document.createElement("details");
-      ad.open = s === lastSession && a === lastAlbum;  // auto-expand only the most recent album
-      const asum = document.createElement("summary");
-      asum.innerHTML = "📁 <b>" + (a.name ? esc(a.name) + " — " : "") + "album " + a.idx + "</b> " +
-        (a.link ? '<a href="' + esc(a.link) + '" target="_blank" rel="noopener">' + esc(trunc(a.url, 60)) + "</a>" : esc(trunc(a.url, 60))) +
-        " &nbsp;" + badge(a.status, a.status) +
-        (a.set_id ? ' <span class="stat">set=a.' + esc(a.set_id) + "</span>" : "") +
-        ' <span class="stat">' + fmtTs(a.start) + " → " + fmtTs(a.end) + " — " + esc(a.end_reason || "") + "</span>" +
-        "<br>" + keyStats(a) + ' <span class="stat">' + statsLine(a) + "</span>" + (a.states ? ' <span class="stat">' + stateLine(a.states) + "</span>" : "");
-      ad.appendChild(asum);
-      const abox = document.createElement("div");
-      abox.className = "tree-indent";
-      const logsBtn = document.createElement("button");
-      logsBtn.textContent = "📜 album logs";
-      logsBtn.addEventListener("click", async () => {
-        const r = await (await fetch("/api/album/" + s.idx + "/" + a.idx + "/logs?limit=2000")).json();
-        const pre = document.createElement("pre");
-        pre.style.cssText = "max-height:300px;overflow:auto;background:var(--bg);padding:6px;border-radius:6px";
-        pre.textContent = r.lines.join("\n");
-        abox.appendChild(pre);
-        logsBtn.remove();
-      });
-      abox.appendChild(logsBtn);
-      const pdet = document.createElement("details");
-      const psum = document.createElement("summary");
-      psum.textContent = "🖼 photos (" + a.photos_n + ") — click to load";
-      pdet.appendChild(psum);
-      const pbox = document.createElement("div");
-      pbox.className = "tree-indent";
-      pdet.appendChild(pbox);
-      let loaded = false;
-      pdet.addEventListener("toggle", async () => {
-        if (!pdet.open || loaded) return;
-        loaded = true;
-        await loadAlbumPhotos(s.idx, a.idx, pbox, 0);
-      });
-      abox.appendChild(pdet);
-      ad.appendChild(abox);
-      box.appendChild(ad);
-    }
-    det.appendChild(box);
-    el.appendChild(det);
-  }
-}
-async function loadAlbumPhotos(s, a, el, offset) {
-  const r = await (await fetch("/api/album/" + s + "/" + a + "?offset=" + offset + "&limit=500")).json();
-  for (const p of r.photos) {
-    const row = document.createElement("div");
-    row.className = "photo-row";
-    const st = p.state || p.status;
-    const icon = { downloaded: "💾", on_disk_only: "📁", missing_on_disk: "⚠️", failed: "❌", pending: "⏳" }[st] || "⏳";
-    let html = icon + " " + badge(st, st) + " " + fmtTs(p.ts) + " ";
-    if (p.link_photo) html += '<a href="' + esc(p.link_photo) + '" target="_blank" rel="noopener">fbid=' + esc(p.fbid || "?") + "</a> ";
-    else html += "fbid=" + esc(p.fbid || "?") + " ";
-    html += '<span class="stat">' + esc(p.file || p.status) +
-      (p.bytes ? " · " + humanSize(p.bytes) : "") +
-      (p.sleep ? " · 💤" + p.sleep.toFixed(1) + "s" : "") +
-      (p.path ? ' · <a href="/api/file?path=' + encodeURIComponent(p.path) + '" target="_blank" rel="noopener">open</a>' : "") + "</span>";
-    row.innerHTML = html;
-    const det = document.createElement("details");
-    const sum = document.createElement("summary");
-    sum.textContent = "details (exif / logs)";
-    det.appendChild(sum);
-    const dbox = document.createElement("div");
-    dbox.className = "tree-indent";
-    det.appendChild(dbox);
-    let loaded = false;
-    det.addEventListener("toggle", async () => {
-      if (!det.open || loaded) return;
-      loaded = true;
-      if (p.path) {
-        const ex = await (await fetch("/api/exif?path=" + encodeURIComponent(p.path))).json();
-        dbox.insertAdjacentHTML("beforeend",
-          '<div class="stat">exif: ' + esc(ex.exif || "none") + " · mtime: " + esc(fmtEpoch(ex.mtime)) +
-          " · name-date: " + esc(ex.name_date || "?") + " · state: " + badge(ex.state, ex.state === "synced" ? "done" : "error") + "</div>");
-      }
-      const lg = await (await fetch("/api/photo/" + s + "/" + a + "/" + p.idx + "/logs?limit=500")).json();
-      const pre = document.createElement("pre");
-      pre.style.cssText = "max-height:260px;overflow:auto;background:var(--bg);padding:6px;border-radius:6px";
-      pre.textContent = lg.lines.join("\n");
-      dbox.appendChild(pre);
-    });
-    row.appendChild(det);
-    el.appendChild(row);
-  }
-  if (r.photos.length + offset < r.photos_n) {
-    const more = document.createElement("button");
-    more.textContent = "⤓ load more photos (" + (r.photos_n - offset - r.photos.length) + " left)";
-    more.addEventListener("click", () => { more.remove(); loadAlbumPhotos(s, a, el, offset + r.photos.length); });
-    el.appendChild(more);
-  }
-}
-
-// ---------------------------------------------------------------- albums view
-async function loadOverview() {
-  try {
-    const o = await (await fetch("/api/albums_overview")).json();
-    renderOverview(o);
-  } catch (e) {}
-}
-function renderOverview(o) {
-  const el = $("view-albums");
-  el.innerHTML = "";
-  if (!o.albums.length) { el.innerHTML = "<p class='stat'>no albums parsed yet</p>"; return; }
-  for (const a of o.albums) {
-    const card = document.createElement("div");
-    card.className = "card";
-    card.id = "album-" + (a.set_id || encodeURIComponent(a.url));
-    card.innerHTML = "<h3>📁 " + (a.name ? "<b>" + esc(a.name) + "</b> — " : "") +
-      (a.link ? '<a href="' + esc(a.link) + '" target="_blank" rel="noopener">' + esc(trunc(a.url, 70)) + "</a>" : esc(trunc(a.url, 70))) +
-      ' <a class="anchor" href="#album=' + esc(a.set_id || a.url) + '" title="permalien (historique navigateur)">🔗</a>' +
-      " " + badge(a.status, a.status) + (a.retried ? " " + badge("retried", "retried") : "") +
-      (a.set_id ? ' <span class="stat">set=a.' + esc(a.set_id) + (a.vanity ? " · vanity=" + esc(a.vanity) : "") + "</span>" : "") +
-      "</h3><div class='stat'>sessions: " + a.sessions.map(x => "#" + x).join(", ") +
-      " · " + keyStats(a) + ' <span class="stat">' + statsLine(a) + "</span>" + (a.states ? ' · ' + stateLine(a.states) : "") +
-      (a.missing_on_disk ? " · ⚠ <b>" + a.missing_on_disk + "</b> missing on disk" : "") +
-      (a.extra_on_disk ? " · ➕ <b>" + a.extra_on_disk + "</b> extra on disk" : "") +
-      (a.end_reason ? " · end: " + esc(a.end_reason) : "") + "</div>";
-    for (const sd of (a.session_details || [])) {
-      const det = document.createElement("details");
-      const sum = document.createElement("summary");
-      sum.innerHTML = "🔄 session <b>#" + sd.session + "</b> · " + fmtTs(sd.start) + " → " + fmtTs(sd.end) +
-        " " + badge(sd.status, sd.status) +
-        " " + keyStats(sd) + ' <span class="stat">' + humanSize(sd.bytes) +
-        (sd.sleeps ? " · 💤 " + sd.sleeps.toFixed(1) + "s" : "") +
-        (sd.errors ? " · ✖ " + sd.errors : "") + (sd.rejections ? " · 🚫 " + sd.rejections : "") + "</span>";
-      det.appendChild(sum);
-      const box = document.createElement("div");
-      box.className = "tree-indent";
-      det.appendChild(box);
-      let loaded = false;
-      det.addEventListener("toggle", async () => {
-        if (!det.open || loaded) return;
-        loaded = true;
-        await loadAlbumPhotos(sd.session, sd.album_idx, box, 0);
-      });
-      card.appendChild(det);
-    }
-    el.appendChild(card);
-  }
-  const st = hashState();
-  if (st.album) setTimeout(() => scrollToAlbum(st.album), 30);
-}
-function hashState() {
-  const h = location.hash;
-  if (h.startsWith("#album=")) return { tab: "albums", album: decodeURIComponent(h.slice(7)) };
-  if (["#log", "#tree", "#albums", "#files"].includes(h)) return { tab: h.slice(1), album: null };
-  return { tab: "log", album: null };
-}
-function scrollToAlbum(key) {
-  const card = $("album-" + CSS.escape(key)) || $("album-" + encodeURIComponent(key));
-  if (card) { card.scrollIntoView(); card.style.borderColor = "var(--blue)"; }
-}
-function applyHash() {  // used by popstate/hashchange: never pushes
-  const st = hashState();
-  showTab(st.tab);
-  if (st.album) setTimeout(() => scrollToAlbum(st.album), 60);
+  if (name === "tree") refreshTree();
+  else if (name === "albums") refreshOverview();
+  else if (name === "files") loadFiles();
 }
 function goTab(name) {  // user action: pushes a history entry
   showTab(name);
   const h = "#" + name;
   if (location.hash !== h) history.pushState({ tab: name }, "", h);
 }
+function applyHash() {  // popstate/hashchange: never pushes
+  const st = hashState();
+  if (st.file) { applyFileHash(st.file); return; }
+  showTab(st.tab);
+  if (st.album) {
+    pendingAlbum = st.album;
+    if (tab === "albums") setTimeout(() => scrollToAlbum(st.album), 80);
+  }
+}
 window.addEventListener("popstate", applyHash);
 window.addEventListener("hashchange", applyHash);
+for (const t of ["log", "tree", "albums", "files"])
+  $("tab-" + t).addEventListener("click", () => goTab(t));
+function scrollToAlbum(key) {
+  const card = $("album-" + key) || $("album-" + encodeURIComponent(key));
+  if (card) { card.scrollIntoView({ block: "start" }); card.style.borderColor = "var(--blue)"; }
+}
+
+// ---------------------------------------------------------------- status banner (fixed 3 lines, textContent updates)
+const SB = {};
+function initBanner() {
+  const mk = (lineId, parts) => {
+    const line = $(lineId);
+    for (const pr of parts) {
+      const s = document.createElement("span");
+      s.className = "sb-part";
+      s.id = pr[0];
+      if (pr[1]) s.title = pr[1];
+      SB[pr[0]] = s;
+      line.appendChild(s);
+      line.appendChild(document.createTextNode(" "));
+    }
+  };
+  mk("sb-l1", [
+    ["sb-files", "Files physically on disk (disk index under the downloads dir)"],
+    ["sb-det", "Photos detected in the logs (GET /photo/?fbid=… page lines, all sessions)"],
+    ["sb-dl", "Files downloaded according to the logs (CDN payloads: fbcdn.net, HTTP < 400 with bytes)"],
+    ["sb-alb", "Albums: unfinished = started in the logs but not marked '#' in albums.txt; remaining = in albums.txt but never started; total = albums.txt entries"],
+  ]);
+  const l2 = $("sb-l2");
+  SB["sb-sleep"] = document.createElement("span");
+  SB["sb-sleep"].className = "sb-part";
+  SB["sb-sleep"].title = "Last 'Sleeping N seconds (reason)' line; wake-up = line timestamp (UTC) + N seconds";
+  l2.appendChild(SB["sb-sleep"]);
+  l2.appendChild(document.createTextNode(" "));
+  SB["sb-cur"] = document.createElement("span");
+  SB["sb-cur"].className = "sb-part";
+  SB["sb-cur"].title = "Album currently being processed (last 'Starting DownloadJob' line) — click to open it in the Albums view";
+  l2.appendChild(SB["sb-cur"]);
+  mk("sb-l3", [
+    ["sb-err", "Log lines with [error]/[critical] level in the scanned region"],
+    ["sb-rej", "Scraping rejections detected (anti-bot: 429 / ban / captcha…) — click the banner in the header to jump to the first one"],
+    ["sb-act", "Timestamp of the last log line (UTC), displayed in the display timezone"],
+    ["sb-size", "Log file size · lines · display timezone"],
+  ]);
+}
+function updateBanner(s) {
+  SB["sb-files"].textContent = "💾 " + s.files_on_disk + " files on disk" + (s.files_truncated ? " (index capped)" : "");
+  SB["sb-det"].textContent = "🖼 " + s.photos_detected + " detected";
+  SB["sb-dl"].textContent = "📥 " + s.downloaded + " downloaded (" + humanSize(s.bytes) + ")";
+  const al = s.albums;
+  SB["sb-alb"].textContent = "📁 albums: " + al.unfinished + " unfinished · " + al.remaining +
+    " remaining · " + al.total + " total (" + al.done + " done)";
+  if (s.last_sleep) {
+    const wake = s.wake_epoch ? fmtEpoch(s.wake_epoch) : "—";
+    const elapsed = s.wake_epoch && s.wake_epoch * 1000 < Date.now();
+    SB["sb-sleep"].textContent = "💤 sleeping " + s.last_sleep.seconds + "s (" + s.last_sleep.reason +
+      ") — wakes " + wake + (elapsed ? " (elapsed)" : "");
+  } else {
+    SB["sb-sleep"].textContent = "▶ working";
+  }
+  const cur = SB["sb-cur"];
+  cur.textContent = "";
+  cur.appendChild(document.createTextNode("📁 current: "));
+  if (s.current_album_set) {
+    const a = document.createElement("a");
+    a.href = "#album=" + encodeURIComponent(s.current_album_set);
+    a.textContent = (s.current_album_name ? s.current_album_name + " " : "") + "(a." + s.current_album_set + ")";
+    cur.appendChild(a);
+  } else {
+    cur.appendChild(document.createTextNode("—"));
+  }
+  SB["sb-err"].textContent = "✖ " + s.errors + " errors";
+  SB["sb-rej"].textContent = "🚫 " + s.rejections + " rejections";
+  SB["sb-act"].textContent = "🕒 last activity " + (s.last_activity ? fmtTs(s.last_activity) : "—");
+  SB["sb-size"].textContent = "📄 " + humanSize(s.log_size) + " · " + s.lines + " lines · " + s.timezone;
+}
+
+// ---------------------------------------------------------------- tree view (3 lines per node)
+let treeData = null, exifStats = { by_album: {}, total: 0, scanned: 0 }, treeBooted = false, treeLoading = false;
+const PHOTOS_PAGE = 500;
+
+const STATE_META = {
+  full:        { icon: "✅", cls: "done",       title: "Full: on disk AND download payload seen in logs (fbcdn.net, HTTP < 400 with bytes)" },
+  already:     { icon: "📁", cls: "retried",    title: "Already downloaded: on disk, photo page seen in logs, but no download payload (skipped)" },
+  missing:     { icon: "⚠️", cls: "incomplete", title: "Missing: download payload seen in logs (CDN) but the file is NOT on disk" },
+  interrupted: { icon: "❌", cls: "pending",    title: "Interrupted: page seen in logs, no completed payload, not on disk (crash mid-write, failed download, ban)" },
+  foreign:     { icon: "➕", cls: "foreign",    title: "Foreign: on disk but never seen in the logs" },
+};
+function badge(txt, cls, title) { return '<span class="badge ' + cls + '"' + (title ? ' title="' + esc(title) + '"' : "") + '>' + esc(txt) + "</span>"; }
+function stateBadge(st) {
+  const m = STATE_META[st] || { icon: "❔", cls: "pending", title: String(st) };
+  return badge(m.icon + " " + st, m.cls, m.title);
+}
+function countersHtml(states) {  // 5 counters: Full / Interrupted / Missing / Already / Foreign
+  const order = [["full", "Full"], ["interrupted", "Interrupted"], ["missing", "Missing"],
+                 ["already", "Already"], ["foreign", "Foreign"]];
+  return order.map((kv) => {
+    const k = kv[0], label = kv[1];
+    const n = states && states[k] ? states[k] : 0;
+    return '<span class="cnt" title="' + esc(STATE_META[k].title) + '">' + STATE_META[k].icon +
+      " " + label + ': <b>' + n + "</b></span>";
+  }).join(" ");
+}
+function exifCountsHtml(setKey) {
+  const es = (exifStats.by_album || {})[setKey];
+  if (es) return '<span title="EXIF check (background precompute over disk files): ✅ synced = |mtime − exif| ≤ tolerance · ⚠️ mismatch · ○ no exif (script not run)">✅' +
+    es.synced + " ⚠️" + es.mismatch + " ○" + es.no_exif + "</span>";
+  if (exifStats.total) return '<span title="EXIF precompute in progress">scanning ' + exifStats.scanned + "/" + exifStats.total + "…</span>";
+  return "—";
+}
+function copyBtn(text) {
+  const b = document.createElement("button");
+  b.className = "copy-btn";
+  b.textContent = "⧉";
+  b.title = "Copy ID: " + text;
+  b.addEventListener("click", (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    const ok = () => { b.textContent = "✓"; setTimeout(() => { b.textContent = "⧉"; }, 900); };
+    if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(text).then(ok, ok);
+    else ok();
+  });
+  return b;
+}
+function makeLogPane(key, loader) {
+  const det = document.createElement("details");
+  det.className = "tnode logspane";
+  det.dataset.key = key;
+  const sum = document.createElement("summary");
+  sum.textContent = "📜 raw log span";
+  const pre = document.createElement("pre");
+  pre.className = "logpane";
+  det.append(sum, pre);
+  det.addEventListener("toggle", async () => {
+    if (!det.open || det.dataset.loaded) return;
+    det.dataset.loaded = "1";
+    pre.textContent = "loading…";
+    try { pre.textContent = (await loader()).join("\n"); }
+    catch (e) { pre.textContent = String(e); }
+  });
+  return det;
+}
+function wireLogsBtn(container, pane) {
+  const btn = container.querySelector(".logs-btn");
+  if (btn) btn.addEventListener("click", (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    pane.open = !pane.open;
+  });
+}
+function sessionNode(s, isLast) {
+  const det = document.createElement("details");
+  det.className = "tnode node-session";
+  det.dataset.key = "s" + s.idx;
+  const dur = tsEpoch(s.end) - tsEpoch(s.start);
+  const st = s.rejections ? "banned" : (isLast ? "running" : "ended");
+  const stCls = s.rejections ? "banned" : (isLast ? "running" : "pending");
+  const stTitle = s.rejections ? "Scraping rejection(s) detected in this session"
+    : (isLast ? "Most recent session (a container restart starts a new session)"
+              : "Session ended (a newer 'Version' line follows)");
+  const sum = document.createElement("summary");
+  sum.innerHTML =
+    '<div class="n-l1">💼 <b>Session #' + s.idx + "</b>" +
+    ' <span class="stat">' + esc(fmtTs(s.start)) + " → " + esc(fmtTs(s.end)) +
+    (isFinite(dur) ? " · ⏱ " + fmtDur(dur / 1000) : "") + "</span> " +
+    badge(st, stCls, stTitle) + "</div>" +
+    '<div class="n-l2">' + countersHtml(s.states) +
+    ' <span class="cnt" title="Cumulative sleep time in this session (sleep-request / download / extractor…)">💤 <b>' + s.sleeps.toFixed(1) + 's</b> sleep</span>' +
+    ' <span class="cnt" title="Bytes downloaded (CDN payloads) in this session">💾 <b>' + humanSize(s.bytes) + "</b></span>" +
+    ' <button class="logs-btn">📜 logs</button></div>' +
+    '<div class="n-l3"><span class="stat">last mtime: ' + (s.max_mtime ? esc(fmtEpoch(s.max_mtime)) : "—") +
+    (s.errors ? " · ✖ <b>" + s.errors + "</b> errors" : "") +
+    (s.rejections ? " · 🚫 <b>" + s.rejections + "</b> rejections" : "") +
+    " · 🖼 <b>" + s.photos_n + "</b> photos</span></div>";
+  det.appendChild(sum);
+  const box = document.createElement("div");
+  box.className = "tree-indent";
+  const pane = makeLogPane("logs-s" + s.idx, async () =>
+    (await (await fetch("/api/session/" + s.idx + "/logs?limit=20000")).json()).lines);
+  wireLogsBtn(sum, pane);
+  box.appendChild(pane);
+  for (let i = 0; i < s.albums.length; i++)
+    box.appendChild(albumNode(s, s.albums[i], isLast && i === s.albums.length - 1));
+  det.appendChild(box);
+  if (!treeBooted && isLast) det.open = true;  // auto-expand only the most recent session
+  return det;
+}
+function albumNode(s, a, auto) {
+  const det = document.createElement("details");
+  det.className = "tnode node-album";
+  det.dataset.key = "s" + s.idx + "/a" + a.idx;
+  const dur = tsEpoch(a.end) - tsEpoch(a.start);
+  const sum = document.createElement("summary");
+  sum.innerHTML =
+    '<div class="n-l1">📁 <b>' + esc(a.name || ("album #" + a.idx)) + "</b>" +
+    (a.set_id ? ' <span class="stat">(a.' + esc(a.set_id) + ")</span>" : "") +
+    ' <span class="stat">' + esc(fmtTs(a.start)) + " → " + esc(fmtTs(a.end)) +
+    (isFinite(dur) ? " · ⏱ " + fmtDur(dur / 1000) : "") + "</span> " +
+    badge(a.status, a.status, a.end_reason || "") + "</div>" +
+    '<div class="n-l2">' + countersHtml(a.states) +
+    ' <span class="cnt" title="Cumulative sleep time for this album">💤 <b>' + a.sleeps.toFixed(1) + 's</b> sleep</span>' +
+    ' <span class="cnt" title="Bytes downloaded (CDN payloads) for this album">💾 <b>' + humanSize(a.bytes) + "</b></span>" +
+    (a.link ? ' <a class="cnt" href="' + esc(a.link) + '" target="_blank" rel="noopener" title="Open this album in Facebook (browser link)">🔗 FB</a>' : "") +
+    (a.set_id ? ' <a class="cnt" href="#album=' + esc(a.set_id) + '" title="Open this album in the Albums view">🗂 #album</a>' : "") +
+    ' <button class="logs-btn">📜 logs</button></div>' +
+    '<div class="n-l3"><span class="stat">last mtime: ' + (a.max_mtime ? esc(fmtEpoch(a.max_mtime)) : "—") +
+    " · exif: " + exifCountsHtml("a." + a.set_id) +
+    " · 🖼 <b>" + a.photos_n + "</b> photos</span></div>";
+  det.appendChild(sum);
+  if (a.set_id) sum.querySelector(".n-l1").appendChild(copyBtn("a." + a.set_id));
+  const box = document.createElement("div");
+  box.className = "tree-indent";
+  const pane = makeLogPane("logs-s" + s.idx + "/a" + a.idx, async () =>
+    (await (await fetch("/api/album/" + s.idx + "/" + a.idx + "/logs?limit=20000")).json()).lines);
+  wireLogsBtn(sum, pane);
+  box.appendChild(pane);
+  const photosBox = document.createElement("div");
+  photosBox.className = "photos";
+  box.appendChild(photosBox);
+  det.appendChild(box);
+  let loaded = false;
+  det.addEventListener("toggle", async () => {
+    if (!det.open || loaded) return;
+    loaded = true;
+    await loadPhotos(s.idx, a.idx, photosBox, 0);  // expanding an album also expands its photos
+  });
+  if (auto && !treeBooted) det.open = true;  // auto-expand only the most recent album
+  return det;
+}
+function photoRow(s, a, p, setId) {
+  const row = document.createElement("div");
+  row.className = "tnode photo";
+  row.dataset.key = "s" + s + "/a" + a + "/p" + p.idx;
+  const linkPhoto = p.link_photo ||
+    (p.fbid ? "https://www.facebook.com/photo/?fbid=" + p.fbid + (setId ? "&set=a." + setId : "") : null);
+  const st = p.state || p.status;
+  row.innerHTML =
+    '<div class="n-l1">' +
+    (p.path ? '<img class="thumb40" loading="lazy" src="/api/thumb?path=' + encodeURIComponent(p.path) + '&w=40" alt="" onerror="this.style.display=&quot;none&quot;">' : "") +
+    "🖼 <b>" + esc(p.fbid || "?") + "</b>" +
+    ' <span class="stat">' + esc(fmtTs(p.ts)) + "</span> " +
+    stateBadge(st) + "</div>" +
+    '<div class="n-l2"><span class="cnt" title="' + esc((STATE_META[st] || {}).title || "") + '">state: ' + stateBadge(st) + "</span>" +
+    ' <span class="cnt" title="Sleep time attributed to this photo (sleep-download lines)">💤 <b>' + (p.sleep || 0).toFixed(1) + "s</b></span>" +
+    ' <span class="cnt" title="Bytes of CDN payloads for this photo">💾 <b>' + humanSize(p.bytes) + "</b></span>" +
+    (linkPhoto ? ' <a class="cnt" href="' + esc(linkPhoto) + '" target="_blank" rel="noopener" title="Open this photo in Facebook (browser link)">🔗 FB</a>' : "") +
+    (p.path ? ' <a class="cnt" href="#file=' + encodeURIComponent(p.path) + '" title="Open the Files view filtered on this file">🗂 #file</a>' : "") +
+    ' <button class="logs-btn">📜 logs</button></div>' +
+    '<div class="n-l3"><span class="stat">' +
+    (p.file ? esc(p.file) + " · " : "") +
+    (p.name_date ? "name-date " + esc(p.name_date) + " · " : "") +
+    (p.mtime ? "mtime " + esc(fmtEpoch(p.mtime)) + " · " : "") +
+    'exif: <span class="exif-chip" data-path="' + esc(p.path || "") + '">' + (p.path ? "…" : "—") + "</span>" +
+    "</span></div>";
+  if (p.fbid) row.querySelector(".n-l1").appendChild(copyBtn(p.fbid));
+  const pane = makeLogPane("logs-s" + s + "/a" + a + "/p" + p.idx, async () =>
+    (await (await fetch("/api/photo/" + s + "/" + a + "/" + p.idx + "/logs?limit=20000")).json()).lines);
+  wireLogsBtn(row, pane);
+  row.appendChild(pane);
+  if (p.path) {
+    const chip = row.querySelector(".exif-chip");
+    exifOf(p.path).then(ex => {
+      if (!ex || ex.mtime == null) { chip.textContent = "error"; return; }
+      chip.innerHTML = badge(ex.state, ex.state === "synced" ? "done" : "error",
+        "EXIF DateTimeOriginal interpreted in " + ex.tz + " · mtime " + fmtEpoch(ex.mtime) +
+        (ex.diff_s != null ? " · Δ" + ex.diff_s + "s" : "") + " · state: " + ex.state) +
+        " " + esc(ex.exif || "no exif");
+    });
+  }
+  return row;
+}
+async function loadPhotos(s, a, box, offset) {
+  try {
+    const r = await (await fetch("/api/album/" + s + "/" + a + "?offset=" + offset + "&limit=" + PHOTOS_PAGE)).json();
+    for (const p of r.photos) box.appendChild(photoRow(s, a, p, r.set_id));
+    if (offset + r.photos.length < r.photos_n) {
+      const more = document.createElement("button");
+      more.className = "more-btn";
+      more.textContent = "⏬ load more photos (" + (r.photos_n - offset - r.photos.length) + " left)";
+      more.addEventListener("click", () => { more.remove(); loadPhotos(s, a, box, offset + r.photos.length); });
+      box.appendChild(more);
+    }
+  } catch (e) {}
+}
+async function refreshTree() {
+  if (treeLoading) return;
+  treeLoading = true;
+  try {
+    const [t, ex] = await Promise.all([
+      fetch("/api/tree").then(r => r.json()),
+      fetch("/api/exif_stats").then(r => r.json()).catch(() => null),
+    ]);
+    treeData = t;
+    if (ex) exifStats = ex;
+    renderTree();
+  } catch (e) {} finally { treeLoading = false; }
+}
+function renderTree() {
+  const t = treeData;
+  if (!t) return;
+  const view = $("view-tree"), root = $("tree-root");
+  // preserve expanded nodes + scroll across live refreshes
+  const openKeys = new Set([...root.querySelectorAll("details.tnode[data-key]")]
+    .filter(d => d.open).map(d => d.dataset.key));
+  const scroll = view.scrollTop;
+  root.innerHTML = "";
+  const lastS = t.sessions[t.sessions.length - 1];
+  for (const s of t.sessions) root.appendChild(sessionNode(s, s === lastS));
+  applyTreeFilter($("tree-q").value.trim().toLowerCase());
+  for (const d of root.querySelectorAll("details.tnode[data-key]"))  // parents come first
+    if (openKeys.has(d.dataset.key)) d.open = true;
+  view.scrollTop = scroll;
+  treeBooted = true;
+  const albums = t.sessions.reduce((n, s) => n + s.albums.length, 0);
+  const photos = t.sessions.reduce((n, s) => n + s.photos_n, 0);
+  $("tree-count").textContent = t.sessions.length + " session(s) · " + albums + " album(s) · " + photos + " photo(s)";
+}
+function applyTreeFilter(q) {
+  for (const el of $("tree-root").querySelectorAll(".tnode"))
+    el.classList.toggle("hidden", !!q && !el.textContent.toLowerCase().includes(q));
+}
+$("tree-q").addEventListener("input", () => applyTreeFilter($("tree-q").value.trim().toLowerCase()));
+
+// ---------------------------------------------------------------- albums view (3-way comparison + cards)
+let overviewData = null, compareData = null, overviewLoading = false;
+async function refreshOverview() {
+  if (overviewLoading) return;
+  overviewLoading = true;
+  try {
+    const [o, c] = await Promise.all([
+      fetch("/api/albums_overview").then(r => r.json()),
+      fetch("/api/albums").then(r => r.json()),
+    ]);
+    overviewData = o;
+    compareData = c;
+    renderOverview();
+  } catch (e) {} finally { overviewLoading = false; }
+}
+function renderCompare(cmp) {
+  const el = $("albums-compare");
+  el.innerHTML = "";
+  if (!cmp) return;
+  const c = cmp.counts || {};
+  const h = document.createElement("h3");
+  h.textContent = "Albums comparison (albums.txt × logs × disk): " +
+    (c.done || 0) + " done · " + (c.incomplete || 0) + " unfinished (started, not done) · " +
+    (c.not_started || 0) + " remaining (in file, never started) · " +
+    (c.not_in_file || 0) + " not in file · " + (c.total || 0) + " total";
+  el.appendChild(h);
+  if (!cmp.albums || !cmp.albums.length) return;
+  const table = document.createElement("table");
+  table.className = "files-table compare-table";
+  table.innerHTML = "<thead><tr>" +
+    "<th>album</th><th>set id</th>" +
+    '<th title="Present in albums.txt; \'#\' prefix = marked done by gallery-dl">albums.txt</th>' +
+    '<th title="A \'Starting DownloadJob\' line for this album was seen in the logs">in logs</th>' +
+    '<th title="Files indexed on disk under this album&#39;s directory">on disk</th>' +
+    "<th>status</th></tr></thead>";
+  const tb = document.createElement("tbody");
+  for (const a of cmp.albums) {
+    const tr = document.createElement("tr");
+    tr.className = "acmp";
+    const name = a.name || a.url || "(unknown)";
+    tr.innerHTML =
+      "<td>" + (a.link ? '<a href="' + esc(a.link) + '" target="_blank" rel="noopener">' + esc(trunc(name, 50)) + "</a>"
+                       : esc(trunc(name, 50))) + "</td>" +
+      "<td class='stat'>" + (a.set_id ? esc("a." + a.set_id) : "—") + "</td>" +
+      "<td>" + (a.in_file
+        ? (a.done ? '<span class="badge done" title="Marked \'#\' (done) in albums.txt">✓ done</span>'
+                  : '<span class="badge incomplete" title="In albums.txt, not marked done yet">○ pending</span>')
+        : "—") + "</td>" +
+      "<td>" + (a.in_logs ? '<span class="badge done" title="Started at least once in the logs">✓ started</span>' : "—") + "</td>" +
+      "<td class='stat'>" + a.on_disk + "</td>" +
+      "<td>" + badge(a.status, a.status === "done" ? "done" : a.status === "not_in_file" ? "not_in_file" : a.status) + "</td>";
+    tb.appendChild(tr);
+  }
+  table.appendChild(tb);
+  el.appendChild(table);
+}
+function albumCard(a) {
+  const card = document.createElement("div");
+  card.className = "card acmp";
+  card.id = "album-" + (a.set_id || encodeURIComponent(a.url));
+  card.innerHTML = "<h3>📁 " + (a.name ? "<b>" + esc(a.name) + "</b> — " : "") +
+    (a.link ? '<a href="' + esc(a.link) + '" target="_blank" rel="noopener">' + esc(trunc(a.url, 70)) + "</a>" : esc(trunc(a.url, 70))) +
+    ' <a class="anchor" href="#album=' + esc(a.set_id || a.url) + '" title="permalink (browser history)">🔗</a>' +
+    " " + badge(a.status, a.status) + (a.retried ? " " + badge("retried", "retried", "seen in more than one session") : "") +
+    (a.set_id ? ' <span class="stat">set=a.' + esc(a.set_id) + (a.vanity ? " · vanity=" + esc(a.vanity) : "") + "</span>" : "") +
+    "</h3><div class='n-l2'>" + countersHtml(a.states) +
+    ' <span class="cnt" title="Cumulative sleep time over all sessions">💤 <b>' + a.sleeps.toFixed(1) + "s</b></span>" +
+    ' <span class="cnt" title="Bytes downloaded (CDN payloads)">💾 <b>' + humanSize(a.bytes) + "</b></span>" +
+    ' <span class="cnt">🖼 <b>' + a.photos + "</b> photos</span>" +
+    ' <span class="cnt">📥 <b>' + a.files + "</b> downloaded</span>" +
+    ' <span class="cnt" title="Files on disk for this album (match by fbid)">💽 <b>' + a.on_disk + "</b> on disk</span>" +
+    (a.missing_on_disk ? ' <span class="cnt" title="Downloaded in logs but not on disk">⚠️ <b>' + a.missing_on_disk + "</b> missing</span>" : "") +
+    (a.extra_on_disk ? ' <span class="cnt" title="On disk but never downloaded in logs">➕ <b>' + a.extra_on_disk + "</b> extra</span>" : "") +
+    (a.errors ? ' <span class="cnt">✖ <b>' + a.errors + "</b></span>" : "") +
+    (a.rejections ? ' <span class="cnt">🚫 <b>' + a.rejections + "</b></span>" : "") +
+    (a.end_reason ? ' <span class="cnt">end: ' + esc(a.end_reason) + "</span>" : "") +
+    "<br>sessions: " + a.sessions.map(x => "#" + x).join(", ") + "</div>";
+  if (a.set_id) card.querySelector("h3").appendChild(copyBtn("a." + a.set_id));
+  for (const sd of (a.session_details || [])) {
+    const det = document.createElement("details");
+    det.className = "tnode";
+    det.dataset.key = "ov-" + (a.set_id || "x") + "-s" + sd.session;
+    const sum = document.createElement("summary");
+    sum.innerHTML = "💼 session <b>#" + sd.session + "</b> · " + esc(fmtTs(sd.session_start)) +
+      " · album " + esc(fmtTs(sd.start)) + " → " + esc(fmtTs(sd.end)) + " " + badge(sd.status, sd.status, sd.end_reason || "") +
+      ' <span class="stat">🖼 ' + sd.photos_n + " · 📥 " + sd.files + " · 💾 " + humanSize(sd.bytes) +
+      (sd.sleeps ? " · 💤 " + sd.sleeps.toFixed(1) + "s" : "") +
+      (sd.errors ? " · ✖ " + sd.errors : "") + (sd.rejections ? " · 🚫 " + sd.rejections : "") + "</span>";
+    det.appendChild(sum);
+    const box = document.createElement("div");
+    box.className = "tree-indent";
+    det.appendChild(box);
+    let loaded = false;
+    det.addEventListener("toggle", async () => {
+      if (!det.open || loaded) return;
+      loaded = true;
+      await loadPhotos(sd.session, sd.album_idx, box, 0);
+    });
+    card.appendChild(det);
+  }
+  return card;
+}
+function renderOverview() {
+  const view = $("view-albums");
+  const openKeys = new Set([...view.querySelectorAll("details.tnode[data-key]")]
+    .filter(d => d.open).map(d => d.dataset.key));
+  const scroll = view.scrollTop;
+  renderCompare(compareData);
+  const root = $("albums-root");
+  root.innerHTML = "";
+  if (overviewData && overviewData.albums.length) {
+    for (const a of overviewData.albums) root.appendChild(albumCard(a));
+  } else {
+    root.innerHTML = "<p class='stat'>no albums parsed yet</p>";
+  }
+  applyAlbumsFilter($("albums-q").value.trim().toLowerCase());
+  for (const d of view.querySelectorAll("details.tnode[data-key]"))
+    if (openKeys.has(d.dataset.key)) d.open = true;
+  view.scrollTop = scroll;
+  if (pendingAlbum) {
+    const k = pendingAlbum;
+    pendingAlbum = null;
+    setTimeout(() => scrollToAlbum(k), 50);
+  }
+}
+function applyAlbumsFilter(q) {
+  for (const el of $("view-albums").querySelectorAll(".acmp"))
+    el.classList.toggle("hidden", !!q && !el.textContent.toLowerCase().includes(q));
+}
+$("albums-q").addEventListener("input", () => applyAlbumsFilter($("albums-q").value.trim().toLowerCase()));
 
 // ---------------------------------------------------------------- files view
 let filesData = null;
@@ -597,6 +884,7 @@ async function loadFiles(refresh) {
     renderFiles();
   } catch (e) {}
 }
+const LOG_STATES = { full: 1, already: 1, foreign: 1 };
 function renderFiles() {
   const el = $("files-list");
   if (!filesData) return;
@@ -618,27 +906,30 @@ function renderFiles() {
   for (const f of filesData.files) {
     if (albumSel.value && f.album_set !== albumSel.value) continue;
     if (q && !(f.name.toLowerCase().includes(q) || (f.fbid || "").includes(q))) continue;
-    if (curState === "not_in_log" && f.in_log) continue;
+    if (curState in LOG_STATES && f.state !== curState) continue;
     matched++;
     if (shown >= 2000) break;
     shown++;
     const row = document.createElement("tr");
+    row.dataset.path = f.path;
     row.innerHTML = '<td><img class="thumb" loading="lazy" src="/api/thumb?path=' + encodeURIComponent(f.path) + '&w=120" onerror="this.style.display=&quot;none&quot;"></td>' +
       "<td>" + esc(f.name) + (f.fbid ? '<br><span class="stat">fbid=' + esc(f.fbid) + "</span>" : "") + "</td>" +
       '<td class="stat">' + humanSize(f.size) + "</td>" +
       '<td class="stat">' + esc(f.name_date || "?") + "</td>" +
       '<td class="stat">' + esc(fmtEpoch(f.mtime)) + "</td>" +
       '<td class="stat">' + esc(f.album_set || "?") + "</td>" +
-      '<td class="stat">' + (f.in_log ? "✓ in log" : '<span style="color:var(--warning)">✗ not in log</span>') + "</td>" +
-      '<td><button class="exif-btn">exif</button><span class="exif-res"></span></td>';
+      '<td class="stat">' + (f.state ? stateBadge(f.state) : (f.in_log ? "✓ in log" : "✗ not in log")) + "</td>" +
+      '<td><button class="exif-btn">exif</button> <span class="exif-res"></span></td>';
     const btn = row.querySelector(".exif-btn");
     const res = row.querySelector(".exif-res");
     const paintExif = async () => {
       const ex = await exifOf(f.path);
-      if (!ex) { res.textContent = "error"; return; }
-      res.innerHTML = badge(ex.state, ex.state === "synced" ? "done" : "error") +
-        " " + esc(ex.exif || "no exif") + (ex.diff_s != null ? " (Δ" + ex.diff_s + "s)" : "");
-      if (curState !== "all") row.style.display = ex.state === curState ? "" : "none";
+      if (!ex || ex.mtime == null) { res.textContent = "error"; return; }
+      res.innerHTML = badge(ex.state, ex.state === "synced" ? "done" : "error",
+        "EXIF DateTimeOriginal " + (ex.exif || "none") + " (interpreted in " + ex.tz + ") · mtime " + fmtEpoch(ex.mtime) +
+        (ex.diff_s != null ? " · Δ" + ex.diff_s + "s" : "")) +
+        " " + esc(ex.exif || "no exif");
+      if (curState !== "all" && !(curState in LOG_STATES) && ex.state !== curState) row.style.display = "none";
     };
     let done = false;
     btn.addEventListener("click", async () => {
@@ -647,15 +938,30 @@ function renderFiles() {
       btn.disabled = true;
       await paintExif();
     });
-    if (curState !== "all") paintExif();  // lazy state filter ("script not run" = no_exif)
+    if (curState !== "all" && !(curState in LOG_STATES)) paintExif();  // lazy exif state filter
     table.appendChild(row);
   }
   el.appendChild(table);
   $("files-count").textContent = filesData.count + " file(s) on disk" +
     (filesData.truncated ? " (index capped at FILES_MAX)" : "") +
-    (filesData.in_log_count != null ? ", " + filesData.in_log_count + " in logs" : "") +
+    (filesData.in_log_count != null ? ", " + filesData.in_log_count + " downloaded in logs" : "") +
     ", " + matched + " shown";
   if (!shown) el.innerHTML = "<p class='stat'>no files</p>";
+  if (pendingFile) {  // #file=<path> : scroll to + highlight the row
+    const row = el.querySelector('tr[data-path="' + qsel(pendingFile) + '"]');
+    if (row) {
+      row.scrollIntoView({ block: "center" });
+      row.classList.add("hl");
+      setTimeout(() => row.classList.remove("hl"), 5000);
+    }
+    pendingFile = null;
+  }
+}
+function applyFileHash(path) {  // #file=<path> : open Files view filtered on this file
+  pendingFile = path;
+  const m = /_(\d{6,})\.[A-Za-z0-9]+$/.exec(decodeURIComponent(path));
+  $("files-q").value = m ? m[1] : decodeURIComponent(path).split("/").pop();
+  showTab("files");
 }
 $("files-album").addEventListener("change", renderFiles);
 $("files-state").addEventListener("change", renderFiles);
@@ -677,9 +983,13 @@ searchEl.addEventListener("input", () => {
 });
 document.querySelectorAll(".cb").forEach(cb => cb.addEventListener("change", refilter));
 rejBanner.addEventListener("click", () => {
-  onlyRej = !onlyRej;
-  rejBanner.classList.toggle("active", onlyRej);
+  // jump to the first rejection line in the Log tab (rejection-only filter on)
+  onlyRej = true;
+  rejBanner.classList.add("active");
+  goTab("log");
   refilter();
+  const first = logEl.querySelector(".line.rej:not(.hidden)");
+  if (first) first.scrollIntoView({ block: "center" });
 });
 $("btn-view-raw").addEventListener("click", () => toggleView("raw"));
 $("btn-view-parsed").addEventListener("click", () => toggleView("parsed"));
@@ -688,7 +998,7 @@ $("btn-clear").addEventListener("click", () => { logEl.innerHTML = ""; allLines 
 $("btn-scroll").addEventListener("click", (e) => {
   autoScroll = !autoScroll;
   e.target.classList.toggle("active", autoScroll);
-  if (autoScroll) logEl.scrollTop = logEl.scrollHeight;
+  if (autoScroll) scrollLogEnd();
 });
 $("btn-pause").addEventListener("click", (e) => {
   paused = !paused;
@@ -698,57 +1008,35 @@ $("btn-pause").addEventListener("click", (e) => {
     pausedEl.style.display = "none";
     const lines = pending; pending = [];
     lines.forEach(appendLine);
-    if (autoScroll) logEl.scrollTop = logEl.scrollHeight;
+    if (autoScroll) scrollLogEnd();
   }
 });
 
-// ---------------------------------------------------------------- poll (chips + statusbar)
+// ---------------------------------------------------------------- poll (banner + header + live tree/albums)
 async function poll() {
   try {
-    const s = await (await fetch("/api/stats")).json();
+    const s = await (await fetch("/api/summary")).json();
+    setTZ(s.timezone);
+    updateBanner(s);
     $("st-lines").textContent = s.lines + (s.truncated ? " (tail)" : "");
     $("st-warn").textContent = s.warnings;
     $("st-err").textContent = s.errors;
+    $("st-size").textContent = s.exists ? humanSize(s.log_size) : "no log file yet";
     const nrej = s.rejections || 0;
     if (nrej > 0) {
       rejBanner.style.display = "";
-      rejBanner.textContent = "🚫 " + nrej + " rejection(s) — click to filter";
+      rejBanner.textContent = "🚫 " + nrej + " rejection(s) — click to jump to the first one";
     } else {
       rejBanner.style.display = "none";
       if (onlyRej) { onlyRej = false; rejBanner.classList.remove("active"); refilter(); }
     }
-    const st = await (await fetch("/api/status")).json();
-    setTZ(st.timezone);
-    $("st-size").textContent = st.exists ? humanSize(st.size) : "no log file yet";
-    const a = await (await fetch("/api/albums")).json();
-    const t = await (await fetch("/api/tree")).json();
-
-    const chips = [];
-    let stateChip;
-    if (s.last_sleep) {
-      const until = Date.parse(s.last_sleep.at.replace(" ", "T") + "Z") + s.last_sleep.seconds * 1000;
-      stateChip = "💤 <b>sleeping " + s.last_sleep.seconds + "s</b> (" + esc(s.last_sleep.reason) + ")" +
-        (Date.now() < until ? " — wakes <b>" + fmtEpoch(until / 1000) + "</b>" : " — (elapsed)");
-    } else {
-      stateChip = "▶ <b>working</b>";
-    }
-    if (t.runs) stateChip += ' &nbsp; 🔄 run <b>#' + (t.runs - 1) + "</b> started " + fmtTs(t.sessions[t.runs - 1].start);
-    chips.push('<span class="chip">' + stateChip + "</span>");
-    if (s.current_album) chips.push('<span class="chip clickable" id="chip-album">📁 <b>' + esc(trunc(s.current_album, 50)) + "</b> · 🖼 " + s.current_album_files + " files</span>");
-    if (a.available) chips.push('<span class="chip ok">✓ albums <b>' + a.counts.done + "/" + a.counts.total + "</b>" +
-      (a.counts.incomplete ? ' · ◐' + a.counts.incomplete : "") + (a.counts.not_started ? ' · ○' + a.counts.not_started : "") + "</span>");
-    chips.push('<span class="chip">🖼 <b>' + s.files + "</b> files</span>");
-    chips.push('<span class="chip ' + (s.errors ? "err" : "") + '">✖ <b>' + s.errors + "</b></span>");
-    chips.push('<span class="chip ' + (nrej ? "err" : "") + '">🚫 <b>' + nrej + "</b></span>");
-    if (st.exists) chips.push('<span class="chip">last activity <b>' + fmtEpoch(st.mtime) + "</b> (" + esc(TZ) + ")</span>");
-    const chipsHtml = chips.join("");
-    if (chipsHtml !== lastChipsHtml) { statusbar.innerHTML = chipsHtml; lastChipsHtml = chipsHtml; }
-    const chipAlbum = $("chip-album");
-    if (chipAlbum) chipAlbum.addEventListener("click", () => goTab("albums"));
+    if (tab === "tree") refreshTree();       // live refresh, expanded nodes + scroll preserved
+    else if (tab === "albums") refreshOverview();
   } catch (e) {}
   setTimeout(poll, 5000);
 }
 
+initBanner();
 loadHistory();
 poll();
 applyHash();
