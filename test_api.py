@@ -725,6 +725,49 @@ class FacebookLogCasesTests(unittest.TestCase):
         self.assertEqual(st["files"], 1)              # the CDN payload
 
 
+class AlbumDoneByReorderedQueryTests(unittest.TestCase):
+    """albums.txt `#` entries and logged `Starting DownloadJob` URLs can carry
+    the same query params in a different order; canonical keying must still
+    mark the album done (tree status, overview, summary)."""
+
+    def setUp(self):
+        from fastapi.testclient import TestClient
+        self.client = TestClient(app)
+        self._orig_log = open(LOG_FILE, encoding="utf-8").read()
+        self._orig_albums = open(ALBUMS_FILE, encoding="utf-8").read()
+        reordered = "https://www.facebook.com/photo/?fbid=28894425153536711&vanity=user42&set=a." + SET_ID
+        canonical = "https://www.facebook.com/photo/?fbid=28894425153536711&set=a." + SET_ID + "&vanity=user42"
+        lines = [
+            "[2026-12-02 10:00:00] [gallery-dl][debug] Version 1.32.21",
+            "[2026-12-02 10:00:01] [gallery-dl][debug] Starting DownloadJob for '" + reordered + "'",
+        ]
+        with open(LOG_FILE, "w", encoding="utf-8") as f:
+            f.write("\n".join(lines) + "\n")
+        with open(ALBUMS_FILE, "w", encoding="utf-8") as f:
+            f.write("# " + canonical + "\n")
+
+    def tearDown(self):
+        with open(LOG_FILE, "w", encoding="utf-8") as f:
+            f.write(self._orig_log)
+        with open(ALBUMS_FILE, "w", encoding="utf-8") as f:
+            f.write(self._orig_albums)
+
+    def test_done_across_views(self):
+        t = self.client.get("/api/tree").json()
+        a = t["sessions"][0]["albums"][0]
+        self.assertEqual(a["status"], "done")
+        albums = self.client.get("/api/albums").json()
+        self.assertEqual([al["status"] for al in albums["albums"]], ["done"])
+        # the reordered `Starting DownloadJob` URL must match the file entry
+        self.assertTrue(albums["albums"][0]["in_logs"])
+        self.assertEqual(albums["counts"]["not_in_file"], 0)
+        ov = self.client.get("/api/albums_overview").json()
+        self.assertEqual(ov["albums"][0]["status"], "done")
+        sm = self.client.get("/api/summary").json()["albums"]
+        self.assertEqual(sm["done"], 1)
+        self.assertEqual(sm["unfinished"], 0)
+
+
 class FilesApiTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):

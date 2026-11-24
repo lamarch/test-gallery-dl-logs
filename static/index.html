@@ -860,13 +860,32 @@ function paintPhotos(s, a, box) {
 }
 async function loadPhotos(s, a, box, offset) {
   try {
-    const r = await (await fetch("/api/album/" + s + "/" + a + "?offset=" + offset + "&limit=" + PHOTOS_PAGE)).json();
     const key = s + "/" + a;
-    const c = photosCache[key] || (photosCache[key] = { set_id: r.set_id, photos_n: 0, photos: [], painted: null });
-    c.set_id = r.set_id;
-    c.photos_n = r.photos_n;
-    if (offset === 0) c.photos = r.photos.concat((c.photos || []).slice(r.photos.length));
-    else c.photos = c.photos.concat(r.photos);
+    const c = photosCache[key] || (photosCache[key] = { set_id: null, photos_n: 0, photos: [], painted: null });
+    const get = (off) =>
+      fetch("/api/album/" + s + "/" + a + "?offset=" + off + "&limit=" + PHOTOS_PAGE).then(r => r.json());
+    if (offset === 0) {
+      // refresh (open node / Refresh button): re-fetch EVERY page the user had
+      // loaded - previously-loaded rows must not keep their stale states
+      // (e.g. 'missing' states rendered before the file landed on disk)
+      const loaded = c.photos.length;
+      const r = await get(0);
+      c.set_id = r.set_id;
+      c.photos_n = r.photos_n;
+      c.photos = r.photos;
+      let off = r.photos.length;
+      while (off < loaded && off < c.photos_n && off < 100000) {
+        const rr = await get(off);
+        if (!rr.photos || !rr.photos.length) break;
+        c.photos = c.photos.concat(rr.photos);
+        off += rr.photos.length;
+      }
+    } else {
+      const r = await get(offset);  // "load more": just append the new page
+      c.set_id = r.set_id;
+      c.photos_n = r.photos_n;
+      c.photos = c.photos.concat(r.photos);
+    }
     const sig = JSON.stringify(c.photos) + "|" + c.photos_n;
     if (sig !== c.painted) paintPhotos(s, a, box);  // repaint only when data changed
   } catch (e) {}
