@@ -663,6 +663,7 @@ def _annotate_disk(t, files=None):
     # union of photo fbids seen in logs, per album set, across ALL sessions
     # (a file seen in another session is not "foreign" for this album)
     log_fbids_by_set = {}
+    sessions_by_set = {}
     dl_fbids_by_set = {}
     size_by_set = {}
     first_mtime_by_set = {}
@@ -673,6 +674,7 @@ def _annotate_disk(t, files=None):
             if f.get("fbid"):
                 first_mtime_by_set[k] = min(first_mtime_by_set.get(k, float("inf")), f["mtime"])
     for s in t["sessions"]:
+        seen_keys = set()
         for a in s["albums"]:
             key = "a." + a["set_id"] if a.get("set_id") else None
             if key:
@@ -680,14 +682,20 @@ def _annotate_disk(t, files=None):
                     p["fbid"] for p in a["photos"] if p.get("fbid"))
                 dl_fbids_by_set.setdefault(key, set()).update(
                     p["fbid"] for p in a["photos"] if p.get("dl") and p.get("fbid"))
+                if key not in seen_keys:  # this session touched this set once
+                    seen_keys.add(key)
+                    sessions_by_set[key] = sessions_by_set.get(key, 0) + 1
     for s in t["sessions"]:
         s["on_disk"] = 0
         s["states"] = {}
         s["max_mtime"] = 0
+        s["rejections_unresolved"] = 0
         counted_foreign = set()
+        counted_size = set()
         for a in s["albums"]:
             key = "a." + a["set_id"] if a.get("set_id") else None
             disk = disk_fbids_by_set.get(key, set()) if key else set()
+            a["retried"] = bool(key) and sessions_by_set.get(key, 1) > 1
             a["on_disk"] = len(disk)
             s["on_disk"] += a["on_disk"]
             for p in a["photos"]:
@@ -708,6 +716,8 @@ def _annotate_disk(t, files=None):
                 states["foreign"] = len(disk - log_fbids_by_set.get(key, set()))
             a["states"] = dict(states)
             a["missing_on_disk"] = states.get("missing", 0)
+            a["extra_on_disk"] = (len(disk - dl_fbids_by_set.get(key, set()))
+                                 if key else 0)  # on disk, never downloaded in log
             a["on_disk_size"] = size_by_set.get(key, 0) if key else 0
             a["max_mtime"] = max_mtime_by_set.get(key, 0) if key else 0
             a["first_mtime"] = (first_mtime_by_set[key]
@@ -731,11 +741,13 @@ def _annotate_disk(t, files=None):
                     a["status"], a["end_reason"] = (
                         "incomplete", "rejection(s) recovered by a later successful download")
             s["max_mtime"] = max(s["max_mtime"], a["max_mtime"])
-            if key and key not in counted_foreign:
+            if key and key not in counted_size:
+                counted_size.add(key)
                 s["on_disk_size"] = s.get("on_disk_size", 0) + a["on_disk_size"]
                 if a["first_mtime"]:
                     s["first_mtime"] = min(s.get("first_mtime") or float("inf"),
                                            a["first_mtime"])
+                s["rejections_unresolved"] += a["rejections_unresolved"]
             for k, v in states.items():
                 s["states"][k] = s["states"].get(k, 0) + v
 
