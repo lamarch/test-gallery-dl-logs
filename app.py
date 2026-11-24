@@ -3,6 +3,7 @@ import io
 import json
 import os
 import re
+import threading
 import time
 from collections import Counter
 from datetime import datetime, timedelta, timezone
@@ -442,7 +443,7 @@ def parse_log():
                     stored_photos[0] += 1
                     cur_p = {"idx": pi, "fbid": pm.group(1), "ts": ts,
                              "start_off": start, "end_off": end, "status": "pending",
-                             "file": None, "sleep": 0.0, "bytes": 0}
+                             "file": None, "sleep": 0.0, "bytes": 0, "dl": False}
                     cur_a["photos"].append(cur_p)
                 else:
                     # cap hit: count the photo but don't materialize it;
@@ -466,16 +467,17 @@ def parse_log():
                     if "fbcdn.net" in line:
                         if cur_p is not None:
                             cur_p["status"] = "downloaded"
+                            cur_p["dl"] = True  # download payload seen in logs
                         if cur_a is not None:
                             cur_a["files"] += 1
                         if cur_s is not None:
                             cur_s["files"] += 1
             dm = DOWNLOAD_RE.search(line)
             if dm:
-                # only carries the final filename, NOT a file count
+                # carries the final filename only; NOT proof of download (it
+                # only appears when the extension changes) -> no dl flag here
                 fname = dm.group(1)
                 if cur_p is not None:
-                    cur_p["status"] = "downloaded"
                     cur_p["file"] = fname
                     fm = FN_ID_RE.search(fname)
                     if fm and not cur_p["fbid"]:
@@ -537,39 +539,84 @@ def get_tree():
 
 
 def _photo_state(p, disk_fbids):
-    """Per-photo state combining log signal and disk presence (fbid):
-    downloaded      = downloaded per logs AND on disk (téléchargée + sauvegardée)
-    on_disk_only    = on disk but no download line in the log (déjà existante /
-                      skipped because present from a previous run)
-    missing_on_disk = log says downloaded but the file is not on disk
-    failed          = download error (anti-bot rejection, HTTP error, ...)
-    pending         = photo page seen, nothing downloaded, not on disk"""
-    if p.get("fbid") and p["fbid"] in disk_fbids:
-        return "downloaded" if p.get("status") == "downloaded" else "on_disk_only"
-    if p.get("status") == "downloaded":
-        return "missing_on_disk"
-    if p.get("status") == "failed":
-        return "failed"
-    return "pending"
+    """Per-photo state. Proof rules (crash-safe):
+    - `dl` = a CDN media payload was seen in the logs (fbcdn.net, HTTP < 400 with
+      bytes). The "Adjusting filename" line is NOT proof (it only appears when the
+      extension changes) - adjusting seen but not on disk is still interrupted.
+    - full        = on disk AND download seen in logs
+    - already     = on disk, page seen in logs, but no download payload (skip)
+    - missing     = download seen in logs (CDN payload) but NOT on disk
+    - interrupted = page seen, no completed download payload, not on disk
+                    (server crash mid-write, failed download, ban, ...)
+    - foreign     = on disk but never seen in the logs (counted at album level)
+    """
+    on_disk = bool(p.get("fbid")) and p["fbid"] in disk_fbids
+    dl = bool(p.get("dl"))
+    if on_disk and dl:
+        return "full"
+    if on_disk:
+        return "already"
+    if dl:
+        return "missing"
+    return "interrupted"
 
 
 def _annotate_disk(t):
-    """Cross log-downloaded photos with files actually on disk, per album."""
+    """Cross log photos with files actually on disk.
+
+    Per photo: explicit 5-state (see _photo_state) + disk file info when present.
+    Per album/session: `states` counters (foreign = on disk in this album's dir
+    but never seen in ANY log session for this set) + on_disk + max_mtime."""
+    files = scan_downloads()["files"]
+    by_fbid = {}
     disk_fbids_by_set = {}
-    for f in scan_downloads()["files"]:
-        if f.get("album_set") and f.get("fbid"):
-            disk_fbids_by_set.setdefault(f["album_set"], set()).add(f["fbid"])
+    max_mtime_by_set = {}
+    for f in files:
+        if f.get("fbid"):
+            by_fbid.setdefault(f["fbid"], f)
+        if f.get("album_set"):
+            k = f["album_set"]
+            if f.get("fbid"):
+                disk_fbids_by_set.setdefault(k, set()).add(f["fbid"])
+            max_mtime_by_set[k] = max(max_mtime_by_set.get(k, 0), f.get("mtime") or 0)
+    # union of photo fbids seen in logs, per album set, across ALL sessions
+    # (a file seen in another session is not "foreign" for this album)
+    log_fbids_by_set = {}
+    for s in t["sessions"]:
+        for a in s["albums"]:
+            key = "a." + a["set_id"] if a.get("set_id") else None
+            if key:
+                log_fbids_by_set.setdefault(key, set()).update(
+                    p["fbid"] for p in a["photos"] if p.get("fbid"))
     for s in t["sessions"]:
         s["on_disk"] = 0
+        s["states"] = {}
+        s["max_mtime"] = 0
+        counted_foreign = set()
         for a in s["albums"]:
             key = "a." + a["set_id"] if a.get("set_id") else None
             disk = disk_fbids_by_set.get(key, set()) if key else set()
             a["on_disk"] = len(disk)
             s["on_disk"] += a["on_disk"]
-            a["missing_on_disk"] = sum(
-                1 for p in a["photos"]
-                if p.get("status") == "downloaded" and p.get("fbid") and p["fbid"] not in disk)
-            a["states"] = dict(Counter(_photo_state(p, disk) for p in a["photos"]))
+            for p in a["photos"]:
+                p["state"] = _photo_state(p, disk)
+                f = by_fbid.get(p.get("fbid")) if p.get("fbid") else None
+                if f:
+                    p["path"] = f["path"]
+                    p["size"] = f["size"]
+                    p["mtime"] = f["mtime"]
+                    p["name_date"] = f.get("name_date")
+            states = Counter(p["state"] for p in a["photos"])
+            if key and key not in counted_foreign:
+                counted_foreign.add(key)
+                # on disk in this album's dir, never seen in any log session
+                states["foreign"] = len(disk - log_fbids_by_set.get(key, set()))
+            a["states"] = dict(states)
+            a["missing_on_disk"] = states.get("missing", 0)
+            a["max_mtime"] = max_mtime_by_set.get(key, 0) if key else 0
+            s["max_mtime"] = max(s["max_mtime"], a["max_mtime"])
+            for k, v in states.items():
+                s["states"][k] = s["states"].get(k, 0) + v
 
 
 @app.get("/api/tree")
@@ -597,16 +644,17 @@ def _photos_from_album_span(spans, s, a):
                 spans[("s", s, a, cur["idx"])] = (cur["start_off"], cur["end_off"])
             cur = {"idx": len(photos), "fbid": pm.group(1), "ts": ts,
                    "start_off": start, "end_off": end, "status": "pending",
-                   "file": None, "sleep": 0.0, "bytes": 0}
+                   "file": None, "sleep": 0.0, "bytes": 0, "dl": False}
             photos.append(cur)
         rm = RESP_RE.search(line)
         if rm and cur is not None and int(rm.group(1)) < 400 and rm.group(2):
             cur["bytes"] += int(rm.group(2))
             if "fbcdn.net" in line:
                 cur["status"] = "downloaded"
+                cur["dl"] = True
         dm = DOWNLOAD_RE.search(line)
         if dm and cur is not None:
-            cur["status"] = "downloaded"
+            # filename only, not proof of download (no dl flag here)
             cur["file"] = dm.group(1)
             fm = FN_ID_RE.search(dm.group(1))
             if fm and not cur["fbid"]:
@@ -635,6 +683,7 @@ def album_detail(s: int, a: int, offset: int = Query(default=0, ge=0),
         alb = t["sessions"][s]["albums"][a]
     except (IndexError, KeyError):
         raise HTTPException(404, "album not found")
+    _annotate_disk(t)  # gives alb: on_disk / states / max_mtime / per-photo state
     photos_src = alb["photos"]
     if alb.get("photos_truncated") and alb["photos_n"] > len(photos_src):
         full = _photos_from_album_span(spans, s, a)
@@ -656,18 +705,16 @@ def album_detail(s: int, a: int, offset: int = Query(default=0, ge=0),
             q["name_date"] = f.get("name_date")
         else:
             q["on_disk"] = False
+        q["dl"] = bool(p.get("dl"))
         # explicit state from log signal + disk presence (no status rewriting)
         q["state"] = _photo_state(p, disk_fbids)
         q["link_photo"] = _photo_link(p.get("fbid"), alb.get("set_id"))
         photos.append(q)
     out = {k: v for k, v in alb.items() if k != "photos"}
     out["photos"] = photos
-    # log-vs-disk comparison summary for this album
-    out["on_disk"] = len(disk_fbids)
+    # downloaded in logs (CDN payload) but not on disk -> explicit fbid list
     out["missing_on_disk"] = sorted(
-        p["fbid"] for p in photos_src
-        if p.get("status") == "downloaded" and p.get("fbid") and p["fbid"] not in disk_fbids)
-    out["states"] = dict(Counter(_photo_state(p, disk_fbids) for p in photos_src))
+        p["fbid"] for p in photos_src if _photo_state(p, disk_fbids) == "missing")
     return out
 
 
@@ -739,13 +786,16 @@ def albums_overview():
                 "name": a.get("name"),
                 "link": a["link"], "sessions": [], "session_details": [], "status": a["status"],
                 "end_reason": a.get("end_reason"), "photos": 0, "files": 0, "bytes": 0,
-                "sleeps": 0.0, "errors": 0, "rejections": 0, "_log_fbids": set(),
-                "states": {},
+                "sleeps": 0.0, "errors": 0, "rejections": 0, "_dl_fbids": set(),
+                "_seen_fbids": set(), "states": {},
                 "on_disk": len(by_set.get("a." + a["set_id"], [])) if a["set_id"] else 0})
             e["sessions"].append(s["idx"])
-            e["_log_fbids"].update(p["fbid"] for p in a["photos"]
-                                  if p.get("status") == "downloaded" and p.get("fbid"))
+            e["_dl_fbids"].update(p["fbid"] for p in a["photos"]
+                                  if p.get("dl") and p.get("fbid"))
+            e["_seen_fbids"].update(p["fbid"] for p in a["photos"] if p.get("fbid"))
             for k, v in a.get("states", {}).items():
+                if k == "foreign":
+                    continue  # recomputed once per album set below
                 e["states"][k] = e["states"].get(k, 0) + v
             e["session_details"].append({
                 "session": s["idx"], "album_idx": a["idx"],
@@ -765,12 +815,13 @@ def albums_overview():
         e["retried"] = len(set(e["sessions"])) > 1
         # recompute from the aggregated counters, not from the first session
         e["status"], e["end_reason"] = _album_status(e, done_set)
-        # log-vs-disk comparison for this album
+        # log-vs-disk comparison for this album set
         key = "a." + e["set_id"] if e.get("set_id") else None
-        disk = {f["fbid"] for f in by_set.get(key, [])} if key else set()
-        e["missing_on_disk"] = len(e["_log_fbids"] - disk)   # downloaded in log, not on disk
-        e["extra_on_disk"] = len(disk - e["_log_fbids"])      # on disk, never downloaded in log
-        del e["_log_fbids"]
+        disk = {f["fbid"] for f in by_set.get(key, []) if f.get("fbid")} if key else set()
+        e["missing_on_disk"] = len(e["_dl_fbids"] - disk)    # downloaded in log, not on disk
+        e["extra_on_disk"] = len(disk - e["_dl_fbids"])      # on disk, never downloaded in log
+        e["states"]["foreign"] = len(disk - e["_seen_fbids"])  # on disk, never seen in logs
+        del e["_dl_fbids"], e["_seen_fbids"]
     out.sort(key=lambda e: (e["sessions"][0] if e["sessions"] else 0))
     return {"albums": out, "done_urls": t["done_urls"]}
 
@@ -835,13 +886,24 @@ def scan_downloads(refresh=False):
 @app.get("/api/files")
 def files_endpoint(refresh: int = 0):
     val = scan_downloads(refresh=bool(refresh))
-    # annotate each file: was its fbid seen as downloaded in the parsed log?
+    # annotate each file with its 5-state (the file IS on disk):
+    #   full = CDN download seen in logs, already = page seen but skipped,
+    #   foreign = never seen in logs. `in_log` = CDN payload seen (dl flag).
     t, _ = get_tree()
-    downloaded = {p["fbid"] for s in t["sessions"] for a in s["albums"]
-                  for p in a["photos"] if p.get("status") == "downloaded" and p.get("fbid")}
+    dl_fbids = set()
+    seen_fbids = set()
+    for s in t["sessions"]:
+        for a in s["albums"]:
+            for p in a["photos"]:
+                if p.get("fbid"):
+                    seen_fbids.add(p["fbid"])
+                    if p.get("dl"):
+                        dl_fbids.add(p["fbid"])
     in_log = 0
     for f in val["files"]:
-        f["in_log"] = bool(f.get("fbid")) and f["fbid"] in downloaded
+        fb = f.get("fbid")
+        f["in_log"] = bool(fb) and fb in dl_fbids
+        f["state"] = "full" if f["in_log"] else ("already" if fb in seen_fbids else "foreign")
         in_log += 1 if f["in_log"] else 0
     val["in_log_count"] = in_log
     return val
@@ -923,16 +985,12 @@ def _exif_epoch(dto, offset):
         return dt.replace(tzinfo=timezone.utc).timestamp()
 
 
-@app.get("/api/exif")
-def exif_endpoint(path: str = ""):
+def _exif_info(full, rel):
     """EXIF DateTimeOriginal + fs mtime + filename date for one file.
 
     state: synced (|mtime - exif| <= EXIF_TOLERANCE_S) / mismatch / no_exif
     (script not run). EXIF time is interpreted via OffsetTimeOriginal if
-    present, else in DISPLAY_TZ (not UTC — EXIF has no timezone)."""
-    full = _safe_path(path)
-    if not full:
-        raise HTTPException(404)
+    present, else in DISPLAY_TZ (not UTC - EXIF has no timezone)."""
     st = os.stat(full)
     dto = None
     off = None
@@ -962,9 +1020,103 @@ def exif_endpoint(path: str = ""):
             state = "synced" if abs(diff_s) <= EXIF_TOLERANCE_S else "mismatch"
         except ValueError:
             state = "no_exif"
-    return {"path": path, "mtime": st.st_mtime, "exif": dto, "exif_epoch": exif_epoch,
+    return {"path": rel, "mtime": st.st_mtime, "exif": dto, "exif_epoch": exif_epoch,
             "offset": off, "name_date": name_date, "state": state, "diff_s": diff_s,
             "tz": DISPLAY_TZ}
+
+
+@app.get("/api/exif")
+def exif_endpoint(path: str = ""):
+    full = _safe_path(path)
+    if not full:
+        raise HTTPException(404)
+    return _exif_info(full, path)
+
+
+# Background EXIF precompute: the tree's album line shows EXIF status counts
+# without a per-file /api/exif call. Progressive: up to EXIF_SCAN_BATCH new
+# files per pass, one pass every EXIF_SCAN_INTERVAL seconds.
+EXIF_SCAN_BATCH = int(os.environ.get("EXIF_SCAN_BATCH", "500"))
+EXIF_SCAN_INTERVAL = float(os.environ.get("EXIF_SCAN_INTERVAL", "10"))
+
+_exif_lock = threading.Lock()
+_exif_cache = {}  # (realpath, mtime_ns) -> _exif_info dict (+ "album_set")
+_exif_progress = {"scanned": 0, "total": 0, "done": False}
+
+
+def _exif_scan_pass(batch=EXIF_SCAN_BATCH):
+    """One progressive pass over the disk index; returns nb of new files read."""
+    files = scan_downloads()["files"]
+    paths = {f["path"] for f in files}
+    fresh = 0
+    for f in files:
+        if fresh >= batch:
+            break
+        full = _safe_path(f["path"])
+        if full is None:
+            continue
+        try:
+            st = os.stat(full)
+        except OSError:
+            continue
+        key = (full, st.st_mtime_ns)
+        with _exif_lock:
+            if key in _exif_cache:
+                continue
+        info = _exif_info(full, f["path"])
+        info["album_set"] = f.get("album_set")
+        with _exif_lock:
+            _exif_cache[key] = info
+        fresh += 1
+    with _exif_lock:
+        for k in [k for k, v in _exif_cache.items() if v.get("path") not in paths]:
+            del _exif_cache[k]  # file disappeared from the disk index
+        n = len(_exif_cache)
+        if n > 4 * FILES_MAX:
+            _exif_cache.clear()
+            n = 0
+    total = len(files)
+    _exif_progress.update(scanned=n, total=total, done=bool(total) and n >= total)
+    return fresh
+
+
+def _exif_worker():
+    while True:
+        try:
+            _exif_scan_pass()
+        except Exception:
+            pass
+        time.sleep(EXIF_SCAN_INTERVAL)
+
+
+if os.environ.get("EXIF_PRECOMPUTE", "1").lower() not in ("0", "false", "no"):
+    threading.Thread(target=_exif_worker, name="exif-precompute", daemon=True).start()
+
+
+@app.get("/api/exif_stats")
+def exif_stats():
+    """Aggregated EXIF check results from the background precompute.
+
+    global: per-state counts over all scanned files; by_album: same per album
+    set; scanned/total/done expose the precompute progress."""
+    files = scan_downloads()
+    total = len(files["files"])
+    with _exif_lock:
+        infos = list(_exif_cache.values())
+    g = Counter(i["state"] for i in infos)
+    by_album = {}
+    for i in infos:
+        c = by_album.setdefault(i.get("album_set") or "(no album)", Counter())
+        c[i["state"]] += 1
+    states = ("synced", "mismatch", "no_exif")
+    return {
+        "global": {s: g.get(s, 0) for s in states},
+        "by_album": {k: {s: c.get(s, 0) for s in states}
+                     for k, c in sorted(by_album.items())},
+        "scanned": len(infos), "total": total,
+        "done": bool(total) and len(infos) >= total,
+        "tz": DISPLAY_TZ,
+    }
 
 
 @app.get("/api/export")
@@ -1005,8 +1157,9 @@ _stats_cache = {"key": None, "value": None}
 
 _EMPTY_STATS = {"exists": False, "lines": 0, "errors": 0, "warnings": 0,
                 "downloads": 0, "skips": 0, "jobs": 0, "rejections": 0,
-                "files": 0, "current_album": None, "current_album_files": 0,
-                "last_sleep": None, "scanned_bytes": 0, "truncated": False}
+                "files": 0, "current_album": None, "current_album_set": None,
+                "current_album_files": 0, "last_sleep": None,
+                "last_activity": None, "scanned_bytes": 0, "truncated": False}
 
 
 @app.get("/api/stats")
@@ -1024,11 +1177,15 @@ def stats():
     last_job = None
     files_since_job = 0
     last_sleep = None
+    last_ts = ""
     start, size = _scan_range()
     for line in _iter_log_lines():
         if not line:
             continue
         counts["lines"] += 1
+        tsm = TS_RE.match(line)
+        if tsm:
+            last_ts = tsm.group(1)
         if REJECTION_RE.search(line):
             counts["rejections"] += 1
         rm = RESP_RE.search(line)
@@ -1061,9 +1218,89 @@ def stats():
             pass  # indented traceback continuation lines are not downloads
         else:
             counts["downloads"] += 1
+    cur_set = None
+    if last_job:
+        m = SET_RE.search(last_job)
+        cur_set = m.group(1) if m else None
     value = {"exists": True, **counts, "files": files, "current_album": last_job,
+             "current_album_set": cur_set,
              "current_album_files": files_since_job, "last_sleep": last_sleep,
+             "last_activity": last_ts or None,
              "scanned_bytes": size - start, "truncated": start > 0}
     _stats_cache["key"] = key
     _stats_cache["value"] = value
     return value
+
+
+@app.get("/api/summary")
+def summary():
+    """Top banner payload: 3 fixed lines of global state.
+
+    Line 1: files on disk / photos detected / downloaded + albums
+    (done / unfinished = started but not '#'-marked / remaining = never
+    started). Line 2: last sleep (+ wake-up epoch) + current album.
+    Line 3: errors / warnings / rejections + last activity."""
+    st = stats()
+    t, _ = get_tree()
+    _annotate_disk(t)
+    files = scan_downloads()
+    parsed = _read_albums_file(ALBUMS_FILE)
+    started = _started_urls()
+    dirnames = _dir_names()
+    if parsed is not None:
+        albums_total = len(parsed)
+        albums_done = sum(1 for _, d in parsed if d)
+        albums_unfinished = sum(1 for u, d in parsed if not d and u in started)
+        albums_remaining = albums_total - albums_done - albums_unfinished
+        albums_available = True
+    else:
+        n_started = len({a["url"] for s in t["sessions"] for a in s["albums"]})
+        albums_total, albums_done = n_started, 0
+        albums_unfinished, albums_remaining = n_started, 0
+        albums_available = False
+    # global 5-state counters, aggregated per album set (union of sessions)
+    disk_by_set = {}
+    for f in files["files"]:
+        if f.get("album_set") and f.get("fbid"):
+            disk_by_set.setdefault(f["album_set"], set()).add(f["fbid"])
+    photos_by_set = {}
+    for s in t["sessions"]:
+        for a in s["albums"]:
+            key = "a." + a["set_id"] if a.get("set_id") else a["url"]
+            photos_by_set.setdefault(key, []).extend(a["photos"])
+    states = Counter()
+    for key, photos in photos_by_set.items():
+        disk = disk_by_set.get(key, set())
+        for p in photos:
+            states[_photo_state(p, disk)] += 1
+        states["foreign"] += len(disk - {p["fbid"] for p in photos if p.get("fbid")})
+    cur_set = st.get("current_album_set")
+    wake_epoch = None
+    ls = st.get("last_sleep")
+    if ls and ls.get("at"):
+        try:
+            at = datetime.strptime(ls["at"], "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc)
+            wake_epoch = (at + timedelta(seconds=float(ls["seconds"]))).timestamp()
+        except (ValueError, TypeError):
+            wake_epoch = None
+    return {
+        "exists": st["exists"], "timezone": DISPLAY_TZ,
+        "log_size": os.path.getsize(LOG_FILE) if st["exists"] else 0,
+        "lines": st["lines"], "scanned_bytes": st["scanned_bytes"],
+        "truncated": st["truncated"],
+        "files_on_disk": files["count"], "files_truncated": files["truncated"],
+        "photos_detected": sum(s["photos_n"] for s in t["sessions"]),
+        "downloaded": sum(s["files"] for s in t["sessions"]),
+        "bytes": sum(s["bytes"] for s in t["sessions"]),
+        "states": dict(states),
+        "albums": {"available": albums_available, "total": albums_total,
+                   "done": albums_done, "unfinished": albums_unfinished,
+                   "remaining": albums_remaining},
+        "last_sleep": ls, "wake_epoch": wake_epoch,
+        "current_album": st.get("current_album"), "current_album_set": cur_set,
+        "current_album_name": dirnames.get("a." + cur_set) if cur_set else None,
+        "current_album_link": _album_link(st["current_album"], cur_set)
+                              if st.get("current_album") else None,
+        "errors": st["errors"], "warnings": st["warnings"],
+        "rejections": st["rejections"], "last_activity": st.get("last_activity"),
+    }

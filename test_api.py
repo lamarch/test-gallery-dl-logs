@@ -15,10 +15,12 @@ ALBUM_DIR = os.path.join(DOWNLOADS_DIR, "facebook", "user42", f"Vacances 2025 (a
 SYNCED_JPG = "20250506_082802_29493495376963016.jpg"
 NOEXIF_JPG = "20250506_082803_29493523296960224.jpg"
 MISMATCH_JPG = "20250506_082805_555444333222111.jpg"
+FOREIGN_JPG = "20250506_082806_999888777666555.jpg"  # on disk, never seen in logs
 ALBUM_REL = f"facebook/user42/Vacances 2025 (a.{SET_ID})"
 SYNCED_REL = f"{ALBUM_REL}/{SYNCED_JPG}"
 NOEXIF_REL = f"{ALBUM_REL}/{NOEXIF_JPG}"
 MISMATCH_REL = f"{ALBUM_REL}/{MISMATCH_JPG}"
+FOREIGN_REL = f"{ALBUM_REL}/{FOREIGN_JPG}"
 
 # 18 log lines, 2 sessions (two "Version" lines = restart), same album started
 # in both -> "retried"; photo downloaded in s0, failed+banned in s1.
@@ -45,7 +47,7 @@ LINES = [
     '[2026-11-23 10:00:02] [urllib3.connectionpool][debug] https://scontent-cdg4-2.xx.fbcdn.net:443 "GET /v/t39.30808-6/555_n.jpg HTTP/1.1" 200 54321',
     "[2026-11-23 10:00:03] [downloader.http][debug] Adjusting filename extension of '20250506_082802_29493523083626912.avif' to 'jpg'",
     # photo page seen, NO download line (file already on disk from a previous run,
-    # MISMATCH_JPG) -> "pending" in the tree, but on_disk -> "downloaded" in album detail
+    # MISMATCH_JPG) -> status "pending" in the tree, but on_disk -> state "already"
     f'[2026-11-23 10:00:04] [urllib3.connectionpool][debug] https://www.facebook.com:443 "GET /photo/?fbid=555444333222111&set=a.{SET_ID} HTTP/1.1" 200 None',
 ]
 with open(LOG_FILE, "w", encoding="utf-8") as f:
@@ -77,6 +79,7 @@ _ex2.get_ifd(0x8769)[36867] = "2025:05:06 08:28:05"
 Image.new("RGB", (16, 16), (9, 9, 9)).save(os.path.join(ALBUM_DIR, MISMATCH_JPG), "JPEG", exif=_ex2)
 _bad = _exif_ts + 3 + 3600  # exif(08:28:05 Paris) + 1h -> mismatch
 os.utime(os.path.join(ALBUM_DIR, MISMATCH_JPG), (_bad, _bad))
+Image.new("RGB", (16, 16), (5, 5, 5)).save(os.path.join(ALBUM_DIR, FOREIGN_JPG), "JPEG")
 
 os.environ["LOG_FILE"] = LOG_FILE
 os.environ["ALBUMS_FILE"] = ALBUMS_FILE
@@ -93,6 +96,9 @@ def clear_caches():
     for c in (app_module._stats_cache, app_module._search_cache,
               app_module._started_cache, app_module._tree_cache):
         c.update(key=None, value=None)
+    app_module._files_cache.update(value=None, ts=0.0)
+    with app_module._exif_lock:
+        app_module._exif_cache.clear()
 
 
 class ApiTests(unittest.TestCase):
@@ -206,7 +212,37 @@ class ApiTests(unittest.TestCase):
         self.assertEqual(data["current_album_files"], 1)
         self.assertEqual(data["last_sleep"],
                          {"seconds": 11.34, "reason": "request", "at": "2026-11-23 10:00:00"})
+        self.assertEqual(data["last_activity"], "2026-11-23 10:00:04")
+        self.assertEqual(data["current_album_set"], SET_ID)
         self.assertFalse(data["truncated"])
+
+    def test_summary_banner(self):
+        data = self.client.get("/api/summary").json()
+        self.assertTrue(data["exists"])
+        self.assertEqual(data["timezone"], "Europe/Paris")
+        self.assertEqual(data["files_on_disk"], 4)
+        self.assertEqual(data["photos_detected"], 4)   # 1 photo in s0 + 3 in s1
+        self.assertEqual(data["downloaded"], 2)        # 2 CDN payloads (L6 + L18)
+        self.assertEqual(data["albums"], {"available": True, "total": 3, "done": 1,
+                                          "unfinished": 1, "remaining": 1})
+        # global 5-state counters: full / already / missing / foreign
+        self.assertEqual(data["states"],
+                         {"full": 1, "already": 2, "missing": 1, "foreign": 1})
+        self.assertEqual(data["current_album"], SET_URL)
+        self.assertEqual(data["current_album_set"], SET_ID)
+        self.assertEqual(data["current_album_name"], "Vacances 2025")
+        self.assertEqual(data["current_album_link"],
+                         f"https://www.facebook.com/media/set/?set=a.{SET_ID}&type=3")
+        self.assertEqual(data["last_sleep"]["reason"], "request")
+        self.assertEqual(data["last_sleep"]["seconds"], 11.34)
+        # wake-up = last sleep "at" (UTC) + seconds
+        self.assertAlmostEqual(
+            data["wake_epoch"],
+            datetime(2026, 11, 23, 10, 0, 0, tzinfo=timezone.utc).timestamp() + 11.34)
+        self.assertEqual(data["errors"], 2)
+        self.assertEqual(data["warnings"], 0)
+        self.assertEqual(data["rejections"], 1)
+        self.assertEqual(data["last_activity"], "2026-11-23 10:00:04")
 
     def test_stats_scan_cap(self):
         old = app_module.SCAN_MAX_BYTES
@@ -271,13 +307,14 @@ class TreeApiTests(unittest.TestCase):
                          f"https://www.facebook.com/media/set/?set=a.{SET_ID}&type=3")
         a0 = s0["albums"][0]
         self.assertEqual(a0["name"], "Vacances 2025")     # download dir title (as downloaded)
-        self.assertEqual(a0["on_disk"], 3)                # log-vs-disk annotation
+        self.assertEqual(a0["on_disk"], 4)                # log-vs-disk annotation (4 files in dir)
         self.assertEqual(a0["missing_on_disk"], 0)        # its only photo is on disk
-        self.assertEqual(a0["states"], {"downloaded": 1})
+        # full = on disk AND CDN payload in logs; foreign = on disk, never in logs
+        self.assertEqual(a0["states"], {"full": 1, "foreign": 1})
         a1t = s1["albums"][0]
         self.assertEqual(a1t["missing_on_disk"], 1)       # fbid ...083626912 downloaded in s1, not on disk
-        # failed-but-on-disk and pending-but-on-disk -> on_disk_only; downloaded-not-on-disk -> missing
-        self.assertEqual(a1t["states"], {"on_disk_only": 2, "missing_on_disk": 1})
+        # failed-but-on-disk and pending-but-on-disk -> already; downloaded-not-on-disk -> missing
+        self.assertEqual(a1t["states"], {"already": 2, "missing": 1, "foreign": 1})
         self.assertEqual(a0["photos_n"], 1)
         self.assertEqual(a0["files"], 1)
         self.assertEqual(a0["bytes"], 392546)
@@ -286,6 +323,9 @@ class TreeApiTests(unittest.TestCase):
         p = a0["photos"][0]
         self.assertEqual(p["fbid"], "29493495376963016")
         self.assertEqual(p["status"], "downloaded")
+        self.assertTrue(p["dl"])                            # CDN payload seen = proof
+        self.assertEqual(p["state"], "full")                # on disk AND downloaded
+        self.assertEqual(p["path"], SYNCED_REL)
         self.assertEqual(p["file"], "20250506_082802_29493495376963016.avif")
         self.assertEqual(p["bytes"], 392546)
         self.assertAlmostEqual(p["sleep"], 7.52)
@@ -295,13 +335,19 @@ class TreeApiTests(unittest.TestCase):
         self.assertEqual(a1["rejections"], 1)
         self.assertEqual(a1["errors"], 2)
         self.assertEqual(a1["photos"][0]["status"], "failed")
+        self.assertFalse(a1["photos"][0]["dl"])
+        self.assertEqual(a1["photos"][0]["state"], "already")   # failed, but file on disk
         # photo 1: downloaded via the CDN .jpg payload (200 + bytes), no Adjusting
-        # line needed; the later Adjusting line only sets the filename (no double count)
+        # line needed; the later Adjusting line only sets the filename (no dl flag)
         self.assertEqual(a1["photos"][1]["status"], "downloaded")
+        self.assertTrue(a1["photos"][1]["dl"])
+        self.assertEqual(a1["photos"][1]["state"], "missing")   # dl in logs, NOT on disk
         self.assertEqual(a1["photos"][1]["bytes"], 54321)
         self.assertEqual(a1["photos"][1]["file"], "20250506_082802_29493523083626912.avif")
-        # last photo: seen in log, no download line, but on disk -> pending in tree
+        # last photo: seen in log, no download payload, but on disk -> already
         self.assertEqual(a1["photos"][2]["status"], "pending")
+        self.assertFalse(a1["photos"][2]["dl"])
+        self.assertEqual(a1["photos"][2]["state"], "already")
         self.assertEqual(a1["photos"][2]["fbid"], "555444333222111")
         self.assertEqual(a1["files"], 1)   # 1 CDN payload, not 2 "Adjusting" lines
         self.assertEqual(a1["bytes"], 54321)
@@ -311,20 +357,22 @@ class TreeApiTests(unittest.TestCase):
         d = self.client.get("/api/album/0/0").json()
         self.assertEqual(d["photos_n"], 1)
         self.assertEqual(len(d["photos"]), 1)
-        self.assertEqual(d["on_disk"], 3)
+        self.assertEqual(d["on_disk"], 4)
+        self.assertEqual(d["states"], {"full": 1, "foreign": 1})
         self.assertEqual(d["missing_on_disk"], [])        # s0's photo is on disk
         d1 = self.client.get("/api/album/1/0").json()
         self.assertEqual(d1["missing_on_disk"], ["29493523083626912"])  # downloaded, not on disk
         by_fbid = {p["fbid"]: p for p in d1["photos"]}
-        # pending in log but on disk (skipped, file from a previous run) -> on_disk_only
+        # pending in log but on disk (skipped, file from a previous run) -> already
         self.assertTrue(by_fbid["555444333222111"]["on_disk"])
         self.assertEqual(by_fbid["555444333222111"]["status"], "pending")
-        self.assertEqual(by_fbid["555444333222111"]["state"], "on_disk_only")
-        # failed in log but file on disk -> on_disk_only (the error is still in errors)
-        self.assertEqual(by_fbid["29493523296960224"]["state"], "on_disk_only")
-        # downloaded in log but not on disk -> missing_on_disk
-        self.assertEqual(by_fbid["29493523083626912"]["state"], "missing_on_disk")
-        self.assertEqual(d1["states"], {"on_disk_only": 2, "missing_on_disk": 1})
+        self.assertEqual(by_fbid["555444333222111"]["state"], "already")
+        # failed in log but file on disk -> already (the error is still in errors)
+        self.assertEqual(by_fbid["29493523296960224"]["state"], "already")
+        # downloaded in log (CDN payload) but not on disk -> missing
+        self.assertEqual(by_fbid["29493523083626912"]["state"], "missing")
+        self.assertTrue(by_fbid["29493523083626912"]["dl"])
+        self.assertEqual(d1["states"], {"already": 2, "missing": 1, "foreign": 1})
         p = d["photos"][0]
         self.assertTrue(p["on_disk"])
         self.assertEqual(p["path"], SYNCED_REL)
@@ -423,10 +471,10 @@ class TreeApiTests(unittest.TestCase):
         self.assertEqual(a["bytes"], 392546 + 54321)
         self.assertEqual(a["errors"], 2)
         self.assertEqual(a["rejections"], 1)
-        self.assertEqual(a["on_disk"], 3)
+        self.assertEqual(a["on_disk"], 4)
         self.assertEqual(a["missing_on_disk"], 1)  # downloaded in log, not on disk
-        self.assertEqual(a["extra_on_disk"], 2)    # on disk, not downloaded in log
-        self.assertEqual(a["states"], {"downloaded": 1, "on_disk_only": 2, "missing_on_disk": 1})
+        self.assertEqual(a["extra_on_disk"], 3)    # on disk, not downloaded in log
+        self.assertEqual(a["states"], {"full": 1, "already": 2, "missing": 1, "foreign": 1})
         self.assertEqual(a["link"], f"https://www.facebook.com/media/set/?set=a.{SET_ID}&type=3")
 
 
@@ -437,38 +485,44 @@ class FilesApiTests(unittest.TestCase):
 
     def test_files_index_skips_logs_dir(self):
         d = self.client.get("/api/files").json()
-        self.assertEqual(d["count"], 3)
+        self.assertEqual(d["count"], 4)
         names = {f["name"] for f in d["files"]}
-        self.assertEqual(names, {SYNCED_JPG, NOEXIF_JPG, MISMATCH_JPG})
+        self.assertEqual(names, {SYNCED_JPG, NOEXIF_JPG, MISMATCH_JPG, FOREIGN_JPG})
         expected_dates = {SYNCED_JPG: "2025-05-06 08:28:02", NOEXIF_JPG: "2025-05-06 08:28:03",
-                          MISMATCH_JPG: "2025-05-06 08:28:05"}
+                          MISMATCH_JPG: "2025-05-06 08:28:05",
+                          FOREIGN_JPG: "2025-05-06 08:28:06"}
         for f in d["files"]:
             self.assertEqual(f["album_set"], f"a.{SET_ID}")
             self.assertEqual(f["name_date"], expected_dates[f["name"]])
             self.assertRegex(f["fbid"], r"^\d{6,}$")
-        # log-vs-disk: only the fbid downloaded in the log is "in_log"
+        # log-vs-disk: only the fbid with a CDN payload in the logs is "in_log" (dl)
         in_log = {f["name"]: f["in_log"] for f in d["files"]}
-        self.assertEqual(in_log, {SYNCED_JPG: True, NOEXIF_JPG: False, MISMATCH_JPG: False})
+        self.assertEqual(in_log, {SYNCED_JPG: True, NOEXIF_JPG: False,
+                                  MISMATCH_JPG: False, FOREIGN_JPG: False})
         self.assertEqual(d["in_log_count"], 1)
+        # per-file state (file IS on disk): full / already / foreign
+        states = {f["name"]: f["state"] for f in d["files"]}
+        self.assertEqual(states, {SYNCED_JPG: "full", NOEXIF_JPG: "already",
+                                  MISMATCH_JPG: "already", FOREIGN_JPG: "foreign"})
 
     def test_files_refresh(self):
         d = self.client.get("/api/files", params={"refresh": 1}).json()
-        self.assertEqual(d["count"], 3)
+        self.assertEqual(d["count"], 4)
         self.assertFalse(d["truncated"])
 
     def test_files_cache_ttl_and_cap(self):
         from PIL import Image as _Img
         extra = os.path.join(ALBUM_DIR, "20250506_082804_777666555444333.jpg")
         try:
-            self.client.get("/api/files", params={"refresh": 1})  # populate cache (3 files)
+            self.client.get("/api/files", params={"refresh": 1})  # populate cache (4 files)
             _Img.new("RGB", (8, 8)).save(extra, "JPEG")
-            d = self.client.get("/api/files").json()             # cached: still 3
-            self.assertEqual(d["count"], 3)
+            d = self.client.get("/api/files").json()             # cached: still 4
+            self.assertEqual(d["count"], 4)
             old_ttl = app_module.FILES_CACHE_TTL
             app_module.FILES_CACHE_TTL = 0                        # TTL=0 -> rescan
             try:
                 d = self.client.get("/api/files").json()
-                self.assertEqual(d["count"], 4)                   # new file visible
+                self.assertEqual(d["count"], 5)                   # new file visible
                 old_max = app_module.FILES_MAX
                 app_module.FILES_MAX = 1
                 try:
@@ -481,7 +535,7 @@ class FilesApiTests(unittest.TestCase):
                 app_module.FILES_CACHE_TTL = old_ttl
         finally:
             os.remove(extra)
-            self.client.get("/api/files", params={"refresh": 1})  # restore cache (count 3)
+            self.client.get("/api/files", params={"refresh": 1})  # restore cache (count 4)
 
     def test_file_serving_and_traversal(self):
         r = self.client.get("/api/file", params={"path": SYNCED_REL})
@@ -526,13 +580,29 @@ class FilesApiTests(unittest.TestCase):
         self.assertIsNone(d["diff_s"])
         self.assertEqual(self.client.get("/api/exif", params={"path": "../app.py"}).status_code, 404)
 
+    def test_exif_stats_precompute(self):
+        # force one full precompute pass (the background thread does the same
+        # progressively in production)
+        self.client.get("/api/files", params={"refresh": 1})
+        with app_module._exif_lock:
+            app_module._exif_cache.clear()
+        app_module._exif_scan_pass(batch=10000)
+        d = self.client.get("/api/exif_stats").json()
+        self.assertEqual(d["tz"], "Europe/Paris")
+        self.assertEqual(d["total"], 4)
+        self.assertEqual(d["scanned"], 4)
+        self.assertTrue(d["done"])
+        self.assertEqual(d["global"], {"synced": 1, "mismatch": 1, "no_exif": 2})
+        self.assertEqual(d["by_album"],
+                         {f"a.{SET_ID}": {"synced": 1, "mismatch": 1, "no_exif": 2}})
+
     def test_export_json_attachment(self):
         r = self.client.get("/api/export")
         self.assertEqual(r.status_code, 200)
         self.assertIn("attachment", r.headers["content-disposition"])
         d = r.json()
         self.assertEqual(d["tree"]["runs"], 2)
-        self.assertEqual(d["files"]["count"], 3)
+        self.assertEqual(d["files"]["count"], 4)
         self.assertEqual(len(d["albums_overview"]["albums"]), 1)
 
 
