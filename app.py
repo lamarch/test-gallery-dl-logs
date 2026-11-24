@@ -841,6 +841,8 @@ def _annotate_disk(t, files=None):
                     sessions_by_set[key] = sessions_by_set.get(key, 0) + 1
     for s in t["sessions"]:
         s["on_disk"] = 0
+        s["dup_in_logs"] = 0
+        s["dup_on_disk"] = 0
         s["states"] = {}
         s["max_mtime"] = 0
         s["rejections_unresolved"] = 0
@@ -915,6 +917,8 @@ def _annotate_disk(t, files=None):
                     s["first_mtime"] = min(s.get("first_mtime") or float("inf"),
                                            a["first_mtime"])
                 s["rejections_unresolved"] += a["rejections_unresolved"]
+            s["dup_in_logs"] += a.get("dup_in_logs", 0)
+            s["dup_on_disk"] += a.get("dup_on_disk", 0)
             for k, v in states.items():
                 s["states"][k] = s["states"].get(k, 0) + v
     if t["sessions"] and t["sessions"][-1]["albums"]:

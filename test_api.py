@@ -1011,9 +1011,13 @@ class PhotoDuplicatesTests(unittest.TestCase):
     def test_dup_counts_and_markers(self):
         t = self.client.get("/api/tree").json()
         a = t["sessions"][0]["albums"][0]
+        s = t["sessions"][0]
         self.assertEqual(a["states"]["duplicated"], 2)  # 1 log+disk + 1 disk-only
         self.assertEqual(a["dup_in_logs"], 1)           # fbid 111... seen x2
         self.assertEqual(a["dup_on_disk"], 2)           # fbids 111... and 333...
+        # the session line carries the same split sums for its chips
+        self.assertEqual(s["dup_in_logs"], 1)
+        self.assertEqual(s["dup_on_disk"], 2)
         # every instance carries its source-specific marker
         p_log = next(p for p in a["photos"] if p["fbid"] == "111000222333444")
         self.assertEqual(p_log["dup_log_n"], 2)

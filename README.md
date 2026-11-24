@@ -102,14 +102,14 @@ fbid). Each node (session / album / photo) renders 3 lines:
   `#file=<path>` link (opens the Files tab filtered on it).
 - **Line 2**: the count line: **Detected** (photo pages in logs) then the counters
   **On-disk / Downloaded / Interrupted / Missing / Already / Rejected / Foreign /
-  Duplicated**
+  Dup logs / Dup disk**
   (all chips always shown, zero counts included) —
   "On-disk" is the state called `full` in the API, "Downloaded" counts CDN payloads
   seen in logs (on-disk + missing; already-existing files don't count), "Rejected"
   marks photos that hit an anti-bot rejection (kept even if a later try succeeded),
-  **Duplicated** counts photos whose fbid appears more than once for this album
-  (once per photo; tooltip splits `N in the logs · N on disk`; every photo
-  instance also carries its own `⧉×N` badge — in the logs and/or on disk) —
+  **Dup logs / Dup disk** count photos whose fbid appears more than once for
+  this album, differentiated per source (once per photo; every photo instance
+  also carries its own `⧉×N` badge — in the logs and/or on disk) —
   + sleep + downloaded size + **on-disk size**.
 - **Line 3**: first mtime + vanity id (numbers only) + EXIF counts (`✅ synced /
   ⚠️ mismatch / 🚫 no exif`, background precompute) + a **logs** button per node

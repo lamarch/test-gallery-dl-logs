@@ -552,7 +552,8 @@ const STATE_META = {
   missing:     { icon: "⚠️", cls: "incomplete", title: "Missing: download payload seen in logs (CDN) but the file is NOT on disk" },
   already:     { icon: "📁", cls: "retried",    title: "Already downloaded: on disk, photo page seen in logs, but no download payload (skipped)" },
   foreign:     { icon: "➕", cls: "foreign",    title: "Foreign: on disk but never seen in the logs" },
-  duplicated:  { icon: "⧉", cls: "retried",    title: "Duplicated: photos whose fbid appears more than once for this album (in the logs and/or on disk); counted once per photo" },
+  dup_logs:    { icon: "⧉", cls: "retried",    title: "Duplicated in logs: photo fbids seen more than once for this album in the logs (counted once per photo)" },
+  dup_disk:    { icon: "⧉", cls: "retried",    title: "Duplicated on disk: photo fbids carried by several on-disk files in this album (counted once per photo)" },
 };
 const STATUS_TITLES = {
   done: "Completed (marked '#' in albums.txt)",
@@ -573,18 +574,15 @@ function stateBadge(st) {
   const m = STATE_META[st] || { icon: "❔", cls: "pending", title: String(st) };
   return badge(m.icon + " " + st, m.cls, m.title);
 }
-function countersHtml(states, d) {  // ... / foreign / duplicated
+function countersHtml(states, d) {  // ... / foreign / dup in logs / dup on disk
   const order = [["full", "On-disk"], ["downloaded", "Downloaded"], ["interrupted", "Interrupted"],
                  ["missing", "Missing"], ["already", "Already"], ["rejected", "Rejected"],
-                 ["foreign", "Foreign"], ["duplicated", "Duplicated"]];
+                 ["foreign", "Foreign"], ["dup_in_logs", "Dup logs"], ["dup_on_disk", "Dup disk"]];
   return order.map((kv) => {
     const k = kv[0], label = kv[1];
-    const n = (states && states[k]) || 0;
-    let title = STATE_META[k].title;
-    if (k === "duplicated" && d && (d.dup_in_logs || d.dup_on_disk))
-      title = "Photo fbids appearing more than once for this album: " +
-        (d.dup_in_logs || 0) + " in the logs · " + (d.dup_on_disk || 0) + " on disk";
-    return '<span class="cnt" title="' + esc(title) + '">' + STATE_META[k].icon +
+    const meta = STATE_META[k === "dup_in_logs" ? "dup_logs" : k === "dup_on_disk" ? "dup_disk" : k];
+    const n = (d && d[k]) || (states && states[k]) || 0;
+    return '<span class="cnt" title="' + esc(meta.title) + '">' + meta.icon +
       " " + label + " <b>" + n + "</b></span>";
   }).join(" ");
 }
