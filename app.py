@@ -1,6 +1,7 @@
 import asyncio
 import io
 import json
+import logging
 import os
 import re
 import threading
@@ -16,6 +17,23 @@ from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
 from tailer import Follower, read_range, read_range_back, read_tail
+
+# operational warnings/errors -> docker logs (basicConfig is a no-op if a
+# root handler already exists, e.g. under uvicorn with --log-config)
+logging.basicConfig(level=logging.INFO,
+                    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
+LOG = logging.getLogger("fb-dl")
+
+# dedupe helper: emit a warning only when `version` changes, so frequent
+# endpoints (/api/albums, /api/summary run per render) do not spam the logs
+_warn_state = {}
+
+
+def _warn_changed(key, version, msg):
+    if _warn_state.get(key) != version:
+        _warn_state[key] = version
+        LOG.warning(msg)
+
 
 LOG_FILE = os.environ.get("LOG_FILE", "/downloads/logs/fb-dl.log")
 ALBUMS_FILE = os.environ.get("ALBUMS_FILE", "/config/albums.txt")
@@ -248,10 +266,24 @@ def _read_albums_file(path):
                 done = line.startswith("#")
                 url = line.lstrip("#").strip()
                 url = re.sub(r"\s+#.*", "", url).strip()
-                if url:
-                    albums.append((url, done))
-    except OSError:
+                if not url or not url.strip():
+                    continue
+                if done and "://" not in url:
+                    _warn_changed(("albums-comment", path), url,
+                                  "albums file: '#' line without a URL ignored: %r" % url)
+                    continue          # a comment, not a done album
+                albums.append((url, done))
+    except OSError as e:
+        _warn_changed(("albums-missing", path), None,
+                      "albums file not readable, done/remaining statuses unavailable: %s (%s)"
+                      % (path, e))
         return None
+    try:
+        st = os.stat(path)
+        _warn_changed(("albums-missing", path), (st.st_size, st.st_mtime_ns),
+                      "albums file readable again: %s" % path)
+    except OSError:
+        pass
     return albums
 
 
@@ -303,7 +335,8 @@ def albums():
         return {"available": False, "path": ALBUMS_FILE, "albums": [],
                 "counts": empty, "current": None}
     started_keys = {_url_key(u) for u in _started_urls()}
-    files = scan_downloads()["files"]
+    started_sids = {sid for sid in (_parse_url_ids(u)[0] for u in _started_urls()) if sid}
+    files = scan_downloads(refresh=True)["files"]
     dirnames = _dir_names(files)
     disk_counts = Counter(f.get("album_set") for f in files if f.get("album_set"))
     disk_mtimes = {}
@@ -336,7 +369,8 @@ def albums():
         set_id, _ = _parse_url_ids(url)
         key = "a." + set_id if set_id else url
         seen.add(key)
-        in_logs = _url_key(url) in started_keys
+        in_logs = (_url_key(url) in started_keys
+                   or (set_id and set_id in started_sids))
         if done:
             status = "done"
         elif in_logs:
@@ -385,6 +419,8 @@ def _url_key(url):
         return (parts.scheme.lower(), parts.netloc.lower(),
                 parts.path.rstrip("/"), tuple(sorted(parse_qsl(parts.query))))
     except ValueError:
+        _warn_changed(("url-key", url), None,
+                      "cannot parse album URL, matching it literally: %r" % url)
         return url
 
 
@@ -477,9 +513,11 @@ def _photo_link(fbid, set_id):
     return None
 
 
-def _album_status(a, done_urls):
+def _album_status(a, done_urls, done_sets=()):
     if a["url"] and _url_key(a["url"]) in done_urls:
         return "done", "completed (marked '#' in albums.txt)"
+    if a.get("set_id") and a["set_id"] in done_sets:
+        return "done", "completed (marked '#' in albums.txt, matched by set id)"
     if a["rejections"]:
         return "banned", "scraping rejection (anti-bot)"
     if a["errors"]:
@@ -493,8 +531,10 @@ def parse_log():
     Return (tree, spans): spans maps ("s", si) / ("s", si, ai) / ("s", si, ai, pi)
     to (start_byte, end_byte) ranges in the log file."""
     parsed_albums = _read_albums_file(ALBUMS_FILE) or []
-    # canonical keys: a '#' line matches even with reordered query params
+    # canonical keys: a '#' line matches even with reordered query params;
+    # set ids are the second, scheme/host/tracking-param-proof safety net
     done_urls = {_url_key(u) for u, d in parsed_albums if d}
+    done_sets = {sid for sid in (_parse_url_ids(u)[0] for u, d in parsed_albums if d) if sid}
     dirnames = _dir_names()
 
     sessions = []
@@ -515,7 +555,7 @@ def parse_log():
         if cur_a is not None:
             cur_a["end"] = ts
             cur_a["photos_n"] = cur_a["photos_seen"]
-            cur_a["status"], cur_a["end_reason"] = _album_status(cur_a, done_urls)
+            cur_a["status"], cur_a["end_reason"] = _album_status(cur_a, done_urls, done_sets)
             spans[("s", si, ai)] = (cur_a["start_off"], end_off)
             cur_a = None
 
@@ -623,7 +663,11 @@ def parse_log():
     close_session(prev_end, prev_ts)
 
     done_list = sorted(u for u, d in parsed_albums if d)
-    return {"sessions": sessions, "runs": len(sessions), "done_urls": done_list}, spans
+    if any(a.get("photos_truncated") for s in sessions for a in s["albums"]):
+        LOG.warning("photo node cap hit (TREE_MAX_PHOTOS=%d): capped albums "
+                    "fall back to on-demand span re-parse" % TREE_MAX_PHOTOS)
+    return {"sessions": sessions, "runs": len(sessions), "done_urls": done_list,
+            "done_sets": sorted(done_sets)}, spans
 
 
 _tree_cache = {"key": None, "value": None}
@@ -632,9 +676,19 @@ _tree_cache = {"key": None, "value": None}
 def get_tree():
     try:
         st = os.stat(LOG_FILE)
-        key = (st.st_size, st.st_mtime_ns)
+        key = (st.st_size, st.st_mtime_ns, None, None)
+    except OSError as e:
+        _warn_changed(("log-missing", LOG_FILE), None,
+                      "log file not readable: %s (%s)" % (LOG_FILE, e))
+        return {"sessions": [], "runs": 0, "done_urls": [], "done_sets": []}, {}
+    # albums.txt is part of the tree's done/incomplete verdicts: a '#' written
+    # by the download script must invalidate the cache even when the log itself
+    # has not grown since
+    try:
+        ast = os.stat(ALBUMS_FILE)
+        key = (st.st_size, st.st_mtime_ns, ast.st_size, ast.st_mtime_ns)
     except OSError:
-        return {"sessions": [], "runs": 0, "done_urls": []}, {}
+        pass
     if _tree_cache["key"] == key:
         return _tree_cache["value"]
     value = parse_log()
@@ -784,7 +838,9 @@ def _annotate_disk(t, files=None):
 @app.get("/api/tree")
 def tree():
     t, _ = get_tree()
-    _annotate_disk(t)
+    # explicit tree render = fresh disk index (the 5s banner poll keeps the
+    # FILES_CACHE_TTL-cached scan and stays cheap)
+    _annotate_disk(t, scan_downloads(refresh=True)["files"])
     return t
 
 
@@ -923,7 +979,7 @@ def photo_logs(s: int, a: int, p: int, offset: int = Query(default=0, ge=0),
 def albums_overview():
     """Album-centric view across all sessions (set_id keyed), with retry flag."""
     t, _ = get_tree()
-    files = scan_downloads()["files"]
+    files = scan_downloads(refresh=True)["files"]
     _annotate_disk(t, files)
     by_set = {}
     for f in files:
@@ -970,11 +1026,12 @@ def albums_overview():
             e["errors"] += a["errors"]
             e["rejections"] += a["rejections"]
     out = list(agg.values())
-    done_set = {_url_key(u) for u in t["done_urls"]}
+    done_keys = {_url_key(u) for u in t["done_urls"]}
+    done_sids = set(t.get("done_sets", ()))
     for e in out:
         e["retried"] = len(set(e["sessions"])) > 1
         # recompute from the aggregated counters, not from the first session
-        e["status"], e["end_reason"] = _album_status(e, done_set)
+        e["status"], e["end_reason"] = _album_status(e, done_keys, done_sids)
         e["rejections_unresolved"] = sum(sd.get("rejections_unresolved", 0)
                                         for sd in e["session_details"])
         if e["status"] == "banned" and e["rejections_unresolved"] == 0:
@@ -1000,6 +1057,15 @@ def albums_overview():
 _files_cache = {"value": None, "ts": 0.0}
 
 
+def _safe_walk(root):
+    """os.walk that logs to docker logs instead of dying mid-scan."""
+    try:
+        for entry in os.walk(root):
+            yield entry
+    except OSError as e:
+        LOG.exception("disk index scan failed under %s: %s", root, e)
+
+
 def scan_downloads(refresh=False):
     """Index image files under DOWNLOADS_DIR (skipping the logs dir).
 
@@ -1014,7 +1080,7 @@ def scan_downloads(refresh=False):
     files = []
     truncated = False
     root = DOWNLOADS_DIR
-    for dirpath, dirnames, filenames in os.walk(root):
+    for dirpath, dirnames, filenames in _safe_walk(root):
         if len(files) >= FILES_MAX:
             truncated = True
             break
@@ -1046,6 +1112,9 @@ def scan_downloads(refresh=False):
             if len(files) >= FILES_MAX:
                 truncated = True
                 break
+    if truncated:
+        _warn_changed(("files-truncated", root), len(files),
+                      "disk index hit FILES_MAX=%d: results are partial" % FILES_MAX)
     value = {"root": root, "count": len(files), "truncated": truncated, "files": files}
     _files_cache["value"] = value
     _files_cache["ts"] = now
@@ -1337,7 +1406,9 @@ def stats():
     try:
         st = os.stat(LOG_FILE)
         key = (st.st_size, st.st_mtime_ns)
-    except OSError:
+    except OSError as e:
+        _warn_changed(("stats-log-missing", LOG_FILE), None,
+                      "stats unavailable, log file not readable: %s (%s)" % (LOG_FILE, e))
         return dict(_EMPTY_STATS)
     if _stats_cache["key"] == key:
         return _stats_cache["value"]
@@ -1426,12 +1497,15 @@ def summary():
     _annotate_disk(t, files["files"])
     parsed = _read_albums_file(ALBUMS_FILE)
     started_keys = {_url_key(u) for u in _started_urls()}
+    started_sids = {sid for sid in (_parse_url_ids(u)[0] for u in _started_urls()) if sid}
     dirnames = _dir_names(files["files"])
     if parsed is not None:
         albums_total = len(parsed)
         albums_done = sum(1 for _, d in parsed if d)
-        albums_unfinished = sum(1 for u, d in parsed
-                                if not d and _url_key(u) in started_keys)
+        albums_unfinished = sum(
+            1 for u, d in parsed
+            if not d and (_url_key(u) in started_keys
+                          or (_parse_url_ids(u)[0] or None) in started_sids))
         albums_remaining = albums_total - albums_done - albums_unfinished
         albums_available = True
     else:
