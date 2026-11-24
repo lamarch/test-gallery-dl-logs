@@ -320,9 +320,9 @@ def albums():
         spans = [(_ts_epoch(a["start"]), _ts_epoch(a["end"])) for a in nodes]
         total = sum(e - s for s, e in spans if s is not None and e is not None)
         ends = [e for _, e in spans if e]
-        mtime = disk_mtimes.get(key, 0)
-        candidates = ends + ([mtime] if mtime else [])
-        return total, (max(candidates) if candidates else None)
+        # log activity only: disk mtimes are EXIF-synced (photo shoot date),
+        # not a real "last activity"
+        return total, (max(ends) if ends else None)
     out = []
     counts = {"done": 0, "incomplete": 0, "not_started": 0, "not_in_file": 0}
     current = None
@@ -574,6 +574,8 @@ def parse_log():
                 if cur_s is not None:
                     cur_s["sleeps"] += secs
             if REJECTION_RE.search(line):
+                if cur_p is not None:
+                    cur_p["rejected"] = True
                 if cur_a is not None:
                     cur_a["rejections"] += 1
                 if cur_s is not None:
@@ -626,6 +628,8 @@ def _photo_state(p, disk_fbids):
                     (server crash mid-write, failed download, ban, ...)
     - foreign     = on disk but never seen in the logs (counted at album level)
     """
+    if p.get("rejected"):
+        return "rejected"
     on_disk = bool(p.get("fbid")) and p["fbid"] in disk_fbids
     dl = bool(p.get("dl"))
     if on_disk and dl:
@@ -659,12 +663,23 @@ def _annotate_disk(t, files=None):
     # union of photo fbids seen in logs, per album set, across ALL sessions
     # (a file seen in another session is not "foreign" for this album)
     log_fbids_by_set = {}
+    dl_fbids_by_set = {}
+    size_by_set = {}
+    first_mtime_by_set = {}
+    for f in files:
+        if f.get("album_set"):
+            k = f["album_set"]
+            size_by_set[k] = size_by_set.get(k, 0) + f.get("size") or 0
+            if f.get("fbid"):
+                first_mtime_by_set[k] = min(first_mtime_by_set.get(k, float("inf")), f["mtime"])
     for s in t["sessions"]:
         for a in s["albums"]:
             key = "a." + a["set_id"] if a.get("set_id") else None
             if key:
                 log_fbids_by_set.setdefault(key, set()).update(
                     p["fbid"] for p in a["photos"] if p.get("fbid"))
+                dl_fbids_by_set.setdefault(key, set()).update(
+                    p["fbid"] for p in a["photos"] if p.get("dl") and p.get("fbid"))
     for s in t["sessions"]:
         s["on_disk"] = 0
         s["states"] = {}
@@ -693,8 +708,34 @@ def _annotate_disk(t, files=None):
                 states["foreign"] = len(disk - log_fbids_by_set.get(key, set()))
             a["states"] = dict(states)
             a["missing_on_disk"] = states.get("missing", 0)
+            a["on_disk_size"] = size_by_set.get(key, 0) if key else 0
             a["max_mtime"] = max_mtime_by_set.get(key, 0) if key else 0
+            a["first_mtime"] = (first_mtime_by_set[key]
+                                if key and key in first_mtime_by_set else None)
+            unresolved = 0
+            for p in a["photos"]:
+                if not p.get("rejected"):
+                    continue
+                fb = p.get("fbid")
+                resolved = p.get("dl") or (
+                    fb and fb in disk or fb in dl_fbids_by_set.get(key, set()))
+                if not resolved:
+                    unresolved += 1
+            a["rejections_unresolved"] = unresolved
+            if a.get("status") == "banned" and unresolved == 0:
+                # every rejected photo of this album was downloaded later (or is
+                # on disk) -> the anti-bot ban no longer holds
+                if a["errors"]:
+                    a["status"], a["end_reason"] = "error", "error(s) in log"
+                else:
+                    a["status"], a["end_reason"] = (
+                        "incomplete", "rejection(s) recovered by a later successful download")
             s["max_mtime"] = max(s["max_mtime"], a["max_mtime"])
+            if key and key not in counted_foreign:
+                s["on_disk_size"] = s.get("on_disk_size", 0) + a["on_disk_size"]
+                if a["first_mtime"]:
+                    s["first_mtime"] = min(s.get("first_mtime") or float("inf"),
+                                           a["first_mtime"])
             for k, v in states.items():
                 s["states"][k] = s["states"].get(k, 0) + v
 
@@ -726,6 +767,8 @@ def _photos_from_album_span(spans, s, a):
                    "start_off": start, "end_off": end, "status": "pending",
                    "file": None, "sleep": 0.0, "bytes": 0, "dl": False}
             photos.append(cur)
+        if REJECTION_RE.search(line) and cur is not None:
+            cur["rejected"] = True
         _update_photo_node(cur, line)
         prev_end = end
     if cur is not None:
@@ -855,8 +898,12 @@ def albums_overview():
                 "link": a["link"], "sessions": [], "session_details": [], "status": a["status"],
                 "end_reason": a.get("end_reason"), "photos": 0, "files": 0, "bytes": 0,
                 "sleeps": 0.0, "errors": 0, "rejections": 0, "_dl_fbids": set(),
-                "_seen_fbids": set(), "states": {},
-                "on_disk": len(by_set.get("a." + a["set_id"], [])) if a["set_id"] else 0})
+                "_seen_fbids": set(), "states": {}, "rejections_unresolved": 0,
+                "on_disk": len(by_set.get("a." + a["set_id"], [])) if a["set_id"] else 0,
+                "on_disk_size": (sum(f["size"] for f in by_set.get("a." + a["set_id"], []))
+                                 if a["set_id"] else 0),
+                "first_mtime": (min([f["mtime"] for f in by_set.get("a." + a["set_id"], [])
+                                     if f.get("mtime")], default=None) if a["set_id"] else None)})
             e["sessions"].append(s["idx"])
             e["_dl_fbids"].update(p["fbid"] for p in a["photos"]
                                   if p.get("dl") and p.get("fbid"))
@@ -871,6 +918,7 @@ def albums_overview():
                 "photos_n": a["photos_n"], "files": a["files"], "bytes": a["bytes"],
                 "states": a.get("states", {}),
                 "sleeps": a["sleeps"], "errors": a["errors"], "rejections": a["rejections"],
+                "rejections_unresolved": a.get("rejections_unresolved", 0),
                 "status": a["status"], "end_reason": a.get("end_reason")})
             e["photos"] += a["photos_n"]
             e["files"] += a["files"]
@@ -884,6 +932,15 @@ def albums_overview():
         e["retried"] = len(set(e["sessions"])) > 1
         # recompute from the aggregated counters, not from the first session
         e["status"], e["end_reason"] = _album_status(e, done_set)
+        e["rejections_unresolved"] = sum(sd.get("rejections_unresolved", 0)
+                                        for sd in e["session_details"])
+        if e["status"] == "banned" and e["rejections_unresolved"] == 0:
+            # recovery-aware: all rejected photos were downloaded later
+            if e["errors"]:
+                e["status"], e["end_reason"] = "error", "error(s) in log"
+            else:
+                e["status"], e["end_reason"] = (
+                    "incomplete", "rejection(s) recovered by a later successful download")
         # log-vs-disk comparison for this album set
         key = "a." + e["set_id"] if e.get("set_id") else None
         disk = {f["fbid"] for f in by_set.get(key, []) if f.get("fbid")} if key else set()

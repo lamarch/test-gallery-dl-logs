@@ -275,8 +275,8 @@ class ApiTests(unittest.TestCase):
                                           "unfinished": 1, "remaining": 1})
         # global counters: 5-state + downloaded (CDN payload seen in logs)
         self.assertEqual(data["states"],
-                         {"full": 1, "downloaded": 2, "already": 2, "missing": 1,
-                          "foreign": 1})
+                         {"full": 1, "downloaded": 2, "rejected": 1, "already": 1,
+                          "missing": 1, "foreign": 1})
         self.assertEqual(data["current_album"], SET_URL)
         self.assertEqual(data["current_album_set"], SET_ID)
         self.assertEqual(data["current_album_name"], "Vacances 2025")
@@ -364,7 +364,8 @@ class TreeApiTests(unittest.TestCase):
         self.assertEqual(a1t["missing_on_disk"], 1)       # fbid ...083626912 downloaded in s1, not on disk
         # failed-but-on-disk and pending-but-on-disk -> already; downloaded-not-on-disk -> missing
         self.assertEqual(a1t["states"],
-                         {"downloaded": 1, "already": 2, "missing": 1, "foreign": 1})
+                         {"downloaded": 1, "rejected": 1, "already": 1, "missing": 1,
+                          "foreign": 1})
         self.assertEqual(a0["photos_n"], 1)
         self.assertEqual(a0["files"], 1)
         self.assertEqual(a0["bytes"], 392546)
@@ -381,12 +382,16 @@ class TreeApiTests(unittest.TestCase):
         self.assertAlmostEqual(p["sleep"], 7.52)
         a1 = s1["albums"][0]
         self.assertEqual(a1["photos_n"], 3)
-        self.assertEqual(a1["status"], "banned")
+        # the rejection was recovered (the photo file is on disk) -> not banned
+        self.assertEqual(a1["status"], "error")
         self.assertEqual(a1["rejections"], 1)
         self.assertEqual(a1["errors"], 2)
         self.assertEqual(a1["photos"][0]["status"], "failed")
         self.assertFalse(a1["photos"][0]["dl"])
-        self.assertEqual(a1["photos"][0]["state"], "already")   # failed, but file on disk
+        # failed + rejection line within its span -> rejected (kept even though
+        # the file is on disk - the rejection history stays visible)
+        self.assertEqual(a1["photos"][0]["state"], "rejected")
+        self.assertTrue(a1["photos"][0]["rejected"])
         # photo 1: downloaded via the CDN .jpg payload (200 + bytes), no Adjusting
         # line needed; the later Adjusting line only sets the filename (no dl flag)
         self.assertEqual(a1["photos"][1]["status"], "downloaded")
@@ -418,12 +423,13 @@ class TreeApiTests(unittest.TestCase):
         self.assertEqual(by_fbid["555444333222111"]["status"], "pending")
         self.assertEqual(by_fbid["555444333222111"]["state"], "already")
         # failed in log but file on disk -> already (the error is still in errors)
-        self.assertEqual(by_fbid["29493523296960224"]["state"], "already")
+        self.assertEqual(by_fbid["29493523296960224"]["state"], "rejected")
         # downloaded in log (CDN payload) but not on disk -> missing
         self.assertEqual(by_fbid["29493523083626912"]["state"], "missing")
         self.assertTrue(by_fbid["29493523083626912"]["dl"])
         self.assertEqual(d1["states"],
-                         {"downloaded": 1, "already": 2, "missing": 1, "foreign": 1})
+                         {"downloaded": 1, "rejected": 1, "already": 1, "missing": 1,
+                          "foreign": 1})
         p = d["photos"][0]
         self.assertTrue(p["on_disk"])
         self.assertEqual(p["path"], SYNCED_REL)
@@ -501,8 +507,10 @@ class TreeApiTests(unittest.TestCase):
         self.assertEqual(len(o["albums"]), 1)
         a = o["albums"][0]
         self.assertEqual(a["set_id"], SET_ID)
-        # status recomputed from aggregated counters: the album saw a rejection
-        self.assertEqual(a["status"], "banned")
+        # status recomputed from aggregated counters: the rejection was
+        # recovered (photo downloaded right after / on disk) -> not banned
+        self.assertEqual(a["status"], "error")
+        self.assertEqual(a["rejections_unresolved"], 0)
         # per-session details: one entry per session, with album_idx + photos
         sds = {d["session"]: d for d in a["session_details"]}
         self.assertEqual(sorted(sds), [0, 1])
@@ -511,7 +519,7 @@ class TreeApiTests(unittest.TestCase):
         self.assertEqual(sds[0]["status"], "incomplete")
         self.assertEqual(sds[1]["photos_n"], 3)
         self.assertEqual(sds[1]["files"], 1)
-        self.assertEqual(sds[1]["status"], "banned")
+        self.assertEqual(sds[1]["status"], "error")
         self.assertIn("session_start", sds[0])
         self.assertIn("start", sds[1])
         self.assertEqual(a["sessions"], [0, 1])
@@ -525,8 +533,8 @@ class TreeApiTests(unittest.TestCase):
         self.assertEqual(a["on_disk"], 4)
         self.assertEqual(a["missing_on_disk"], 1)  # downloaded in log, not on disk
         self.assertEqual(a["extra_on_disk"], 3)    # on disk, not downloaded in log
-        self.assertEqual(a["states"], {"full": 1, "downloaded": 2, "already": 2,
-                                      "missing": 1, "foreign": 1})
+        self.assertEqual(a["states"], {"full": 1, "downloaded": 2, "rejected": 1,
+                                      "already": 1, "missing": 1, "foreign": 1})
         self.assertEqual(a["link"], f"https://www.facebook.com/media/set/?set=a.{SET_ID}&type=3")
 
 
@@ -559,6 +567,61 @@ class WaitingLineTests(unittest.TestCase):
         t = self.client.get("/api/tree").json()
         last = t["sessions"][-1]
         self.assertGreaterEqual(last["sleeps"], 900.0)
+
+
+class RejectionRecoveryTests(unittest.TestCase):
+    """A rejected photo keeps its 'rejected' state even when it is downloaded
+    right after (second try), and the album only stays 'banned' while some
+    rejected photo was never successfully downloaded later (or is on disk)."""
+
+    def setUp(self):
+        self.client = TestClient(app)
+        self._orig = open(LOG_FILE, encoding="utf-8").read()
+        lines = [
+            "[2026-11-22 18:00:00] [gallery-dl][debug] Version 1.32.21",
+            "[2026-11-22 18:00:01] [facebook][debug] Starting DownloadJob for "
+            "'https://www.facebook.com/media/set/?set=a.777&type=3'",
+            '[2026-11-22 18:00:02] [urllib3.connectionpool][debug] '
+            'https://www.facebook.com:443 "GET /photo/?fbid=77001&set=a.777 HTTP/1.1" 200 None',
+            "[2026-11-22 18:00:03] [facebook][warning] "
+            "You've been temporarily blocked from viewing images.",
+            "[2026-11-22 18:00:04] [gallery-dl][debug] Version 1.32.21",
+            "[2026-11-22 18:02:01] [facebook][debug] Starting DownloadJob for "
+            "'https://www.facebook.com/media/set/?set=a.777&type=3'",
+            '[2026-11-22 18:02:02] [urllib3.connectionpool][debug] '
+            'https://www.facebook.com:443 "GET /photo/?fbid=77001&set=a.777 HTTP/1.1" 200 None',
+            '[2026-11-22 18:02:03] [urllib3.connectionpool][debug] '
+            'https://x.fbcdn.net:443 "GET /v/t39/1.jpg HTTP/1.1" 200 1000',
+        ]
+        with open(LOG_FILE, "w", encoding="utf-8") as f:
+            f.write("\n".join(lines) + "\n")
+
+    def tearDown(self):
+        with open(LOG_FILE, "w", encoding="utf-8") as f:
+            f.write(self._orig)
+
+    def test_rejected_state_is_kept_after_recovery(self):
+        t = self.client.get("/api/tree").json()
+        s0, s1 = t["sessions"]
+        p0 = s0["albums"][0]["photos"][0]
+        self.assertTrue(p0["rejected"])
+        self.assertEqual(p0["state"], "rejected")     # visible even if re-downloaded
+        p1 = s1["albums"][0]["photos"][0]             # second try: downloaded fine
+        self.assertTrue(p1["dl"])
+        self.assertFalse(p1.get("rejected"))
+        self.assertEqual(p1["state"], "missing")      # payload seen, not on disk
+
+    def test_album_unbanned_once_every_rejection_recovered(self):
+        t = self.client.get("/api/tree").json()
+        a0 = t["sessions"][0]["albums"][0]
+        self.assertEqual(a0["status"], "incomplete")
+        self.assertEqual(a0["rejections_unresolved"], 0)
+        self.assertIn("recovered", a0["end_reason"])   # explicit recovery reason
+        for s in t["sessions"][1:]:
+            self.assertNotEqual(s["albums"][0]["status"], "banned")
+        o = self.client.get("/api/albums_overview").json()["albums"][0]
+        self.assertEqual(o["status"], "incomplete")
+        self.assertEqual(o["rejections_unresolved"], 0)
 
 
 class FilesApiTests(unittest.TestCase):
