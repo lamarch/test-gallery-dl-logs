@@ -359,7 +359,10 @@ async function loadEarlier() {
     const data = await r.json();
     firstOffset = data.start_offset;
     hasMore = data.has_more;
+    const v = $("view-log");
+    const h0 = v.scrollHeight, s0 = v.scrollTop;
     prependLines(data.lines);
+    v.scrollTop = s0 + (v.scrollHeight - h0);  // prepending must not move the viewport
   } catch (e) {}
   updateEarlierBtn();
 }
@@ -492,6 +495,24 @@ function updateBanner(s) {
 
 // ---------------------------------------------------------------- tree view (3 lines per node)
 let treeData = null, exifStats = { by_album: {}, total: 0, scanned: 0 }, treeBooted = false, treeLoading = false;
+// scroll preservation across live refreshes: reopened nodes load their content
+// asynchronously (photos / log spans), which grows the page AFTER the first
+// restore - so we re-apply the saved scroll when that content settles.
+let scrollRestore = null;
+function applyScrollRestore() { if (scrollRestore) scrollRestore.view.scrollTop = scrollRestore.value; }
+// content caches: reopened nodes repaint INSTANTLY from cache (no empty flash
+// on live refresh); a background fetch then updates the cache and only repaints
+// if the data actually changed.
+const photosCache = {};  // "s/a" -> { set_id, photos_n, photos: [...], painted: sig }
+const spanCache = {};    // "logs-..." -> joined raw log lines
+function keepScroll(view, value) {
+  scrollRestore = { view, value };
+  applyScrollRestore();
+  setTimeout(applyScrollRestore, 0);
+  setTimeout(applyScrollRestore, 150);
+  setTimeout(applyScrollRestore, 500);
+  setTimeout(() => { if (scrollRestore && scrollRestore.view === view) scrollRestore = null; }, 1500);
+}
 const PHOTOS_PAGE = 500;
 
 const STATE_META = {
@@ -549,9 +570,14 @@ function makeLogPane(key, loader) {
   det.addEventListener("toggle", async () => {
     if (!det.open || det.dataset.loaded) return;
     det.dataset.loaded = "1";
-    pre.textContent = "loading…";
-    try { pre.textContent = (await loader()).join("\n"); }
-    catch (e) { pre.textContent = String(e); }
+    if (spanCache[key] !== undefined) { pre.textContent = spanCache[key]; applyScrollRestore(); }
+    else pre.textContent = "loading…";
+    try {
+      const txt = (await loader()).join("\n");
+      if (spanCache[key] !== txt) spanCache[key] = txt;
+      if (pre.textContent !== spanCache[key]) pre.textContent = spanCache[key];
+      applyScrollRestore();
+    } catch (e) { pre.textContent = String(e); }
   });
   return det;
 }
@@ -634,10 +660,13 @@ function albumNode(s, a, auto) {
   box.appendChild(photosBox);
   det.appendChild(box);
   let loaded = false;
-  det.addEventListener("toggle", async () => {
+  det.addEventListener("toggle", () => {
     if (!det.open || loaded) return;
     loaded = true;
-    await loadPhotos(s.idx, a.idx, photosBox, 0);  // expanding an album also expands its photos
+    // expanding an album also expands its photos; repaint instantly from cache
+    // so the 5 s live refresh does not empty the node, then refresh in background
+    if (photosCache[s.idx + "/" + a.idx]) paintPhotos(s.idx, a.idx, photosBox);
+    loadPhotos(s.idx, a.idx, photosBox, 0);
   });
   if (auto && !treeBooted) det.open = true;  // auto-expand only the most recent album
   return det;
@@ -684,17 +713,32 @@ function photoRow(s, a, p, setId) {
   }
   return row;
 }
+function paintPhotos(s, a, box) {
+  const c = photosCache[s + "/" + a];
+  box.innerHTML = "";
+  if (!c) return;
+  for (const p of c.photos) box.appendChild(photoRow(s, a, p, c.set_id));
+  if (c.photos.length < c.photos_n) {
+    const more = document.createElement("button");
+    more.className = "more-btn";
+    more.textContent = "⏬ load more photos (" + (c.photos_n - c.photos.length) + " left)";
+    more.addEventListener("click", () => { more.remove(); loadPhotos(s, a, box, c.photos.length); });
+    box.appendChild(more);
+  }
+  c.painted = JSON.stringify(c.photos) + "|" + c.photos_n;
+  applyScrollRestore();
+}
 async function loadPhotos(s, a, box, offset) {
   try {
     const r = await (await fetch("/api/album/" + s + "/" + a + "?offset=" + offset + "&limit=" + PHOTOS_PAGE)).json();
-    for (const p of r.photos) box.appendChild(photoRow(s, a, p, r.set_id));
-    if (offset + r.photos.length < r.photos_n) {
-      const more = document.createElement("button");
-      more.className = "more-btn";
-      more.textContent = "⏬ load more photos (" + (r.photos_n - offset - r.photos.length) + " left)";
-      more.addEventListener("click", () => { more.remove(); loadPhotos(s, a, box, offset + r.photos.length); });
-      box.appendChild(more);
-    }
+    const key = s + "/" + a;
+    const c = photosCache[key] || (photosCache[key] = { set_id: r.set_id, photos_n: 0, photos: [], painted: null });
+    c.set_id = r.set_id;
+    c.photos_n = r.photos_n;
+    if (offset === 0) c.photos = r.photos.concat((c.photos || []).slice(r.photos.length));
+    else c.photos = c.photos.concat(r.photos);
+    const sig = JSON.stringify(c.photos) + "|" + c.photos_n;
+    if (sig !== c.painted) paintPhotos(s, a, box);  // repaint only when data changed
   } catch (e) {}
 }
 async function refreshTree() {
@@ -724,7 +768,7 @@ function renderTree() {
   applyTreeFilter($("tree-q").value.trim().toLowerCase());
   for (const d of root.querySelectorAll("details.tnode[data-key]"))  // parents come first
     if (openKeys.has(d.dataset.key)) d.open = true;
-  view.scrollTop = scroll;
+  keepScroll(view, scroll);
   treeBooted = true;
   const albums = t.sessions.reduce((n, s) => n + s.albums.length, 0);
   const photos = t.sessions.reduce((n, s) => n + s.photos_n, 0);
@@ -829,10 +873,11 @@ function albumCard(a) {
     box.className = "tree-indent";
     det.appendChild(box);
     let loaded = false;
-    det.addEventListener("toggle", async () => {
+    det.addEventListener("toggle", () => {
       if (!det.open || loaded) return;
       loaded = true;
-      await loadPhotos(sd.session, sd.album_idx, box, 0);
+      if (photosCache[sd.session + "/" + sd.album_idx]) paintPhotos(sd.session, sd.album_idx, box);
+      loadPhotos(sd.session, sd.album_idx, box, 0);
     });
     card.appendChild(det);
   }
@@ -854,7 +899,7 @@ function renderOverview() {
   applyAlbumsFilter($("albums-q").value.trim().toLowerCase());
   for (const d of view.querySelectorAll("details.tnode[data-key]"))
     if (openKeys.has(d.dataset.key)) d.open = true;
-  view.scrollTop = scroll;
+  keepScroll(view, scroll);
   if (pendingAlbum) {
     const k = pendingAlbum;
     pendingAlbum = null;
