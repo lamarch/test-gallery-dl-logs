@@ -552,6 +552,8 @@ const STATE_META = {
   missing:     { icon: "⚠️", cls: "incomplete", title: "Missing: download payload seen in logs (CDN) but the file is NOT on disk" },
   already:     { icon: "📁", cls: "retried",    title: "Already downloaded: on disk, photo page seen in logs, but no download payload (skipped)" },
   foreign:     { icon: "➕", cls: "foreign",    title: "Foreign: on disk but never seen in the logs" },
+  dup_logs:    { icon: "⧉", cls: "retried",    title: "Duplicated in logs: photo fbids seen more than once for this album in the logs (counted once per photo)" },
+  dup_disk:    { icon: "⧉", cls: "retried",    title: "Duplicated on disk: photo fbids carried by several on-disk files in this album (counted once per photo)" },
 };
 const STATUS_TITLES = {
   done: "Completed (marked '#' in albums.txt)",
@@ -572,20 +574,21 @@ function stateBadge(st) {
   const m = STATE_META[st] || { icon: "❔", cls: "pending", title: String(st) };
   return badge(m.icon + " " + st, m.cls, m.title);
 }
-function countersHtml(states) {  // on-disk / downloaded / interrupted / missing / already / rejected / foreign
+function countersHtml(states, d) {  // ... / foreign / dup in logs / dup on disk
   const order = [["full", "On-disk"], ["downloaded", "Downloaded"], ["interrupted", "Interrupted"],
                  ["missing", "Missing"], ["already", "Already"], ["rejected", "Rejected"],
-                 ["foreign", "Foreign"]];
+                 ["foreign", "Foreign"], ["dup_in_logs", "Dup logs"], ["dup_on_disk", "Dup disk"]];
   return order.map((kv) => {
     const k = kv[0], label = kv[1];
-    const n = (states && states[k]) || 0;
-    return '<span class="cnt" title="' + esc(STATE_META[k].title) + '">' + STATE_META[k].icon +
+    const meta = STATE_META[k === "dup_in_logs" ? "dup_logs" : k === "dup_on_disk" ? "dup_disk" : k];
+    const n = (d && d[k]) || (states && states[k]) || 0;
+    return '<span class="cnt" title="' + esc(meta.title) + '">' + meta.icon +
       " " + label + " <b>" + n + "</b></span>";
   }).join(" ");
 }
-function countersLine(detected, states) {
+function countersLine(detected, states, d) {
   return '<span class="cnt" title="Photo pages detected in the logs (all sessions of this album)">🖼 Detected <b>' +
-    (detected || 0) + "</b></span> " + countersHtml(states);
+    (detected || 0) + "</b></span> " + countersHtml(states, d);
 }
 function exifCountsHtml(setKey) {
   const es = (exifStats.by_album || {})[setKey];
@@ -659,7 +662,7 @@ function sessionNode(s, isLast) {
     badge(st, stCls, stTitle) +
     ' <small class="stat">' + esc(fmtTs(s.start)) + " → " + esc(fmtTs(s.end)) +
     (isFinite(dur) ? " · ⏱ " + fmtDur(dur / 1000) : "") + "</small></div>" +
-    '<div class="n-l2">' + countersLine(s.photos_n, s.states) +
+    '<div class="n-l2">' + countersLine(s.photos_n, s.states, s) +
     ' <span class="cnt" title="Cumulative sleep time in this session (sleep-request / download / extractor…)">💤 <b>' + fmtDur(s.sleeps) + '</b> sleep</span>' +
     ' <span class="cnt" title="Bytes downloaded (CDN payloads) in this session">💾 <b>' + humanSize(s.bytes) + "</b></span>" +
     ' <span class="cnt" title="Total size of this session\'s files on disk">💽 <b>' + humanSize(s.on_disk_size || 0) + "</b></span></div>" +
@@ -712,7 +715,7 @@ function albumLinesHtml(d, mode) {
       ' <small class="stat">' + esc(fmtTs(d.start)) + " → " + esc(fmtTs(d.end)) +
       (isFinite(dur) ? " · ⏱ " + fmtDur(dur) : "") + "</small></div>";
   }
-  const l2 = '<div class="n-l2">' + countersLine(d.detected, d.states) +
+  const l2 = '<div class="n-l2">' + countersLine(d.detected, d.states, d) +
     ' <span class="cnt" title="Cumulative sleep time">💤 <b>' + fmtDur(d.sleeps || 0) + '</b> sleep</span>' +
     ' <span class="cnt" title="Bytes downloaded (CDN payloads)">💾 <b>' + humanSize(d.bytes || 0) + "</b></span>" +
     ' <span class="cnt" title="Total size of this album\'s files on disk">💽 <b>' + humanSize(d.on_disk_size || 0) + "</b></span>" +
@@ -824,7 +827,12 @@ function photoRow(s, a, p, setId) {
     '<div class="photo-info">' +
     '<div class="n-l1"><b>' + esc(p.fbid || "?") + "</b>" +
     ' <span class="stat">' + esc(fmtTs(p.ts)) + "</span> " +
-    stateBadge(st) + "</div>" +
+    stateBadge(st) +
+    (p.dup_log_n ? badge("⧉×" + p.dup_log_n, "retried",
+      "This photo's fbid was seen " + p.dup_log_n + " times for this album in the logs") : "") +
+    (p.dup_disk_n ? badge("⧉×" + p.dup_disk_n, "retried",
+      p.dup_disk_n + " files on disk carry this photo's fbid for this album") : "") +
+    "</div>" +
     '<div class="n-l2"><span class="stat">' + esc(shownName || "—") + "</span>" +
     ' <span class="cnt" title="Sleep time attributed to this photo (sleep-download lines)">💤 <b>' + fmtDur(p.sleep || 0) + "</b></span>" +
     ' <span class="cnt" title="Bytes of CDN payloads for this photo">💾 <b>' + humanSize(p.bytes) + "</b></span>" +

@@ -364,13 +364,13 @@ class TreeApiTests(unittest.TestCase):
         self.assertEqual(a0["on_disk"], 4)                # log-vs-disk annotation (4 files in dir)
         self.assertEqual(a0["missing_on_disk"], 0)        # its only photo is on disk
         # full = on disk AND CDN payload in logs; foreign = on disk, never in logs
-        self.assertEqual(a0["states"], {"full": 1, "downloaded": 1, "foreign": 1})
+        self.assertEqual(a0["states"], {"full": 1, "downloaded": 1, "foreign": 1, "duplicated": 0})
         a1t = s1["albums"][0]
         self.assertEqual(a1t["missing_on_disk"], 1)       # fbid ...083626912 downloaded in s1, not on disk
         # failed-but-on-disk and pending-but-on-disk -> already; downloaded-not-on-disk -> missing
         self.assertEqual(a1t["states"],
                          {"downloaded": 1, "rejected": 1, "already": 1, "missing": 1,
-                          "foreign": 1})
+                          "foreign": 1, "duplicated": 0})
         self.assertEqual(a0["photos_n"], 1)
         self.assertEqual(a0["files"], 1)
         self.assertEqual(a0["bytes"], 392546)
@@ -420,7 +420,7 @@ class TreeApiTests(unittest.TestCase):
         self.assertEqual(d["photos_n"], 1)
         self.assertEqual(len(d["photos"]), 1)
         self.assertEqual(d["on_disk"], 4)
-        self.assertEqual(d["states"], {"full": 1, "downloaded": 1, "foreign": 1})
+        self.assertEqual(d["states"], {"full": 1, "downloaded": 1, "foreign": 1, "duplicated": 0})
         self.assertEqual(d["missing_on_disk"], [])        # s0's photo is on disk
         d1 = self.client.get("/api/album/1/0").json()
         self.assertEqual(d1["missing_on_disk"], ["29493523083626912"])  # downloaded, not on disk
@@ -436,7 +436,7 @@ class TreeApiTests(unittest.TestCase):
         self.assertTrue(by_fbid["29493523083626912"]["dl"])
         self.assertEqual(d1["states"],
                          {"downloaded": 1, "rejected": 1, "already": 1, "missing": 1,
-                          "foreign": 1})
+                          "foreign": 1, "duplicated": 0})
         p = d["photos"][0]
         self.assertTrue(p["on_disk"])
         self.assertEqual(p["path"], SYNCED_REL)
@@ -543,7 +543,7 @@ class TreeApiTests(unittest.TestCase):
         self.assertEqual(a["on_disk"], 4)
         self.assertEqual(a["missing_on_disk"], 1)  # downloaded in log, not on disk
         self.assertEqual(a["extra_on_disk"], 3)    # on disk, not downloaded in log
-        self.assertEqual(a["states"], {"full": 1, "downloaded": 2, "rejected": 1,
+        self.assertEqual(a["states"], {"full": 1, "downloaded": 2, "rejected": 1, "duplicated": 0,
                                       "already": 1, "missing": 1, "foreign": 1})
         self.assertEqual(a["link"], f"https://www.facebook.com/media/set/?set=a.{SET_ID}&type=3")
 
@@ -960,6 +960,75 @@ class AlbumIdDuplicatesTests(unittest.TestCase):
             self.assertEqual(r["disk_dup"], 2)  # user42 + user43 directories
             self.assertEqual(r["log_url_dup"], 2)  # SET_URL + vanity variant
 
+
+
+class PhotoDuplicatesTests(unittest.TestCase):
+    """Duplicated photos, per album, log and disk separated:
+    - in logs: the same fbid page seen twice for one album
+    - on disk: several files carrying the same fbid
+    Each duplicated PHOTO counts once in the new 'duplicated' state; every
+    instance row carries its dup markers."""
+
+    URL = "https://www.facebook.com/media/set?vanity=user42&set=a." + SET_ID
+
+    def setUp(self):
+        from fastapi.testclient import TestClient
+        self.client = TestClient(app)
+        self._orig_log = open(LOG_FILE, encoding="utf-8").read()
+        get_photo = ("[2026-12-05 10:00:0%d] [urllib3.connectionpool][debug] "
+                     'https://www.facebook.com:443 "GET /photo/?fbid=%s&set=a.' + SET_ID + ' HTTP/1.1" 200 None')
+        lines = [
+            "[2026-12-05 10:00:00] [gallery-dl][debug] Version 1.32.21",
+            "[2026-12-05 10:00:01] [gallery-dl][debug] Starting DownloadJob for '" + self.URL + "'",
+            get_photo % (2, "111000222333444"),   # seen twice in the logs
+            get_photo % (3, "222000222333444"),
+            get_photo % (4, "111000222333444"),
+        ]
+        with open(LOG_FILE, "w", encoding="utf-8") as f:
+            f.write("\n".join(lines) + "\n")
+        # on-disk duplicates: two files for a fbid also seen in the logs
+        # (its photo row gets the disk marker) + two files for a disk-only
+        # fbid (counted per album; no photo row exists for it)
+        from PIL import Image
+        self.dup_files = [
+            os.path.join(ALBUM_DIR, "20261205_100002_111000222333444.jpg"),
+            os.path.join(ALBUM_DIR, "20251205_100003_111000222333444.jpg"),
+            os.path.join(ALBUM_DIR, "20261205_100004_333000222333444.jpg"),
+            os.path.join(ALBUM_DIR, "20251205_100005_333000222333444.jpg"),
+        ]
+        for p in self.dup_files:
+            Image.new("RGB", (3, 3), (4, 4, 4)).save(p, "JPEG")
+        clear_caches()
+
+    def tearDown(self):
+        with open(LOG_FILE, "w", encoding="utf-8") as f:
+            f.write(self._orig_log)
+        for p in self.dup_files:
+            if os.path.exists(p):
+                os.remove(p)
+        clear_caches()
+
+    def test_dup_counts_and_markers(self):
+        t = self.client.get("/api/tree").json()
+        a = t["sessions"][0]["albums"][0]
+        s = t["sessions"][0]
+        self.assertEqual(a["states"]["duplicated"], 2)  # 1 log+disk + 1 disk-only
+        self.assertEqual(a["dup_in_logs"], 1)           # fbid 111... seen x2
+        self.assertEqual(a["dup_on_disk"], 2)           # fbids 111... and 333...
+        # the session line carries the same split sums for its chips
+        self.assertEqual(s["dup_in_logs"], 1)
+        self.assertEqual(s["dup_on_disk"], 2)
+        # every instance carries its source-specific marker
+        p_log = next(p for p in a["photos"] if p["fbid"] == "111000222333444")
+        self.assertEqual(p_log["dup_log_n"], 2)
+        self.assertEqual(p_log["dup_disk_n"], 2)
+        d = self.client.get("/api/album/0/0").json()
+        pd = next(p for p in d["photos"] if p["fbid"] == "111000222333444")
+        self.assertEqual(pd["dup_disk_n"], 2)
+        ov = self.client.get("/api/albums_overview").json()["albums"][0]
+        self.assertEqual(ov["states"]["duplicated"], 2)
+        self.assertEqual(ov["dup_in_logs"], 1)
+        self.assertEqual(ov["dup_on_disk"], 2)
 
 
 class FilesApiTests(unittest.TestCase):
