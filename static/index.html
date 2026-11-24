@@ -1027,8 +1027,13 @@ async function refreshOverview() {
 }
 async function loadCompare() {
   try {
-    compareData = await (await fetch("/api/albums")).json();
-    renderCompare(compareData);
+    const [cmp, ex] = await Promise.all([
+      (await fetch("/api/albums")).json(),
+      fetch("/api/exif_stats").then(r => r.json()).catch(() => null),
+    ]);
+    if (ex) exifStats = ex;  // exif column uses the same per-album precompute
+    compareData = cmp;
+    renderCompare(cmp);
   } catch (e) {}
 }
 function renderCompare(cmp) {
@@ -1051,6 +1056,7 @@ function renderCompare(cmp) {
     '<th title="A Starting DownloadJob line for this album was seen in the logs">in logs</th>' +
     '<th title="Files indexed on disk under this album&#39;s directory">on disk</th>' +
     '<th title="Same album id (set=a.) seen more than once: several albums.txt entries, several on-disk directories, or several distinct URLs started in the logs for the same album">duplicates</th>' +
+    '<th title="EXIF check per album (background precompute): synced / mismatch / no exif">exif</th>' +
     '<th title="Newest log activity + total duration of its sessions (disk mtimes are EXIF-synced photo dates, not real activity, so they are ignored)">activity</th>' +
     "<th>status</th></tr></thead>";
   const tb = document.createElement("tbody");
@@ -1069,6 +1075,7 @@ function renderCompare(cmp) {
       "<td>" + (a.in_logs ? badge("✓", "done", "Started at least once in the logs") : "—") + "</td>" +
       "<td class='stat'>" + a.on_disk + "</td>" +
       "<td>" + dupBadges(a) + "</td>" +
+      '<td class="stat">' + (a.set_id ? (exifCountsHtml("a." + a.set_id) || "—") : "—") + "</td>" +
       '<td class="stat">' +
       (a.last_activity ? esc(fmtEpoch(a.last_activity)) : "—") +
       (a.total_duration_s ? " · ⏱ " + fmtDur(a.total_duration_s) : "") +
