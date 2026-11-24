@@ -622,6 +622,8 @@ def parse_log():
         if cur_a is not None:
             cur_a["end"] = ts
             cur_a["photos_n"] = cur_a["photos_seen"]
+            fc = cur_a.pop("_fseen", None) or {}
+            cur_a["dup_fbid_n"] = {k: v for k, v in fc.items() if v > 1}
             cur_a["status"], cur_a["end_reason"] = _album_status(cur_a, done_urls, done_sets)
             spans[("s", si, ai)] = (cur_a["start_off"], end_off)
             cur_a = None
@@ -667,13 +669,15 @@ def parse_log():
                          "link": _album_link(url, set_id), "start": ts, "end": ts,
                          "start_off": start, "end_off": end, "photos": [], "photos_n": 0,
                          "photos_seen": 0, "photos_truncated": False,
-                         "files": 0, "bytes": 0, "sleeps": 0.0, "errors": 0, "rejections": 0}
+                         "files": 0, "bytes": 0, "sleeps": 0.0, "errors": 0, "rejections": 0,
+                         "_fseen": Counter()}
                 cur_s["albums"].append(cur_a)
             pm = PHOTO_GET_RE.search(line)
             if pm and cur_a is not None:
                 close_photo(prev_end, prev_ts)
                 pi += 1
                 cur_a["photos_seen"] += 1
+                cur_a["_fseen"][pm.group(1)] += 1
                 if TREE_MAX_PHOTOS <= 0 or stored_photos[0] < TREE_MAX_PHOTOS:
                     stored_photos[0] += 1
                     cur_p = {"idx": pi, "fbid": pm.group(1), "ts": ts,
@@ -798,6 +802,7 @@ def _annotate_disk(t, files=None):
         files = scan_downloads()["files"]
     by_fbid = {}
     disk_fbids_by_set = {}
+    disk_fcount_by_set = {}
     max_mtime_by_set = {}
     for f in files:
         if f.get("fbid"):
@@ -806,6 +811,8 @@ def _annotate_disk(t, files=None):
             k = f["album_set"]
             if f.get("fbid"):
                 disk_fbids_by_set.setdefault(k, set()).add(f["fbid"])
+                fc = disk_fcount_by_set.setdefault(k, Counter())
+                fc[f["fbid"]] += 1
             max_mtime_by_set[k] = max(max_mtime_by_set.get(k, 0), f.get("mtime") or 0)
     # union of photo fbids seen in logs, per album set, across ALL sessions
     # (a file seen in another session is not "foreign" for this album)
@@ -842,11 +849,21 @@ def _annotate_disk(t, files=None):
         for a in s["albums"]:
             key = "a." + a["set_id"] if a.get("set_id") else None
             disk = disk_fbids_by_set.get(key, set()) if key else set()
+            disk_dup = {k: v for k, v in (disk_fcount_by_set.get(key) or {}).items()
+                        if v > 1}
+            log_dup = a.get("dup_fbid_n") or {}
             a["retried"] = bool(key) and sessions_by_set.get(key, 1) > 1
             a["on_disk"] = len(disk)
+            a["dup_in_logs"] = len(log_dup)
+            a["dup_on_disk"] = len(disk_dup)
             s["on_disk"] += a["on_disk"]
             for p in a["photos"]:
                 p["state"] = _photo_state(p, disk)
+                if p.get("fbid"):
+                    if p["fbid"] in log_dup:
+                        p["dup_log_n"] = log_dup[p["fbid"]]
+                    if p["fbid"] in disk_dup:
+                        p["dup_disk_n"] = disk_dup[p["fbid"]]
                 f = by_fbid.get(p.get("fbid")) if p.get("fbid") else None
                 if f:
                     p["path"] = f["path"]
@@ -857,6 +874,9 @@ def _annotate_disk(t, files=None):
             # "downloaded" = CDN download payload seen in the logs (on-disk +
             # missing); photos already on disk from a previous run don't count
             states["downloaded"] = sum(1 for p in a["photos"] if p.get("dl"))
+            # one duplicated PHOTO (unique fbid) no matter how many instances,
+            # in the logs or on disk
+            states["duplicated"] = len(set(log_dup) | set(disk_dup))
             if key and key not in counted_foreign:
                 counted_foreign.add(key)
                 # on disk in this album's dir, never seen in any log session
@@ -958,6 +978,11 @@ def album_detail(s: int, a: int, offset: int = Query(default=0, ge=0),
             photos_src = full
     by_fbid = {f["fbid"]: f for f in files if f.get("fbid")}
     disk_key = "a." + alb["set_id"] if alb.get("set_id") else None
+    log_dup = alb.get("dup_fbid_n") or {}
+    disk_dup = {k: v for k, v in Counter(
+        f["fbid"] for f in files
+        if f.get("fbid") and disk_key and f.get("album_set") == disk_key).items()
+        if v > 1}
     disk_fbids = {f["fbid"] for f in files
                   if f.get("fbid") and f.get("album_set") == disk_key} if disk_key else set()
     photos = []
@@ -973,6 +998,10 @@ def album_detail(s: int, a: int, offset: int = Query(default=0, ge=0),
         else:
             q["on_disk"] = False
         q["dl"] = bool(p.get("dl"))
+        if p.get("fbid") and p["fbid"] in log_dup:
+            q["dup_log_n"] = log_dup[p["fbid"]]
+        if p.get("fbid") and p["fbid"] in disk_dup:
+            q["dup_disk_n"] = disk_dup[p["fbid"]]
         # explicit state from log signal + disk presence (no status rewriting)
         q["state"] = _photo_state(p, disk_fbids)
         q["link_photo"] = _photo_link(p.get("fbid"), alb.get("set_id"))
@@ -1065,6 +1094,7 @@ def albums_overview():
                 "end_reason": a.get("end_reason"), "photos": 0, "files": 0, "bytes": 0,
                 "sleeps": 0.0, "errors": 0, "rejections": 0, "_dl_fbids": set(),
                 "_seen_fbids": set(), "states": {}, "rejections_unresolved": 0,
+                "dup_in_logs": 0, "dup_on_disk": 0,
                 "on_disk": len(by_set.get("a." + a["set_id"], [])) if a["set_id"] else 0,
                 "on_disk_size": (sum(f["size"] for f in by_set.get("a." + a["set_id"], []))
                                  if a["set_id"] else 0),
@@ -1079,6 +1109,8 @@ def albums_overview():
                     continue  # recomputed once per album set below
                 e["states"][k] = e["states"].get(k, 0) + v
             e["running"] = e.get("running", False) or running
+            e["dup_in_logs"] += a.get("dup_in_logs", 0)
+            e["dup_on_disk"] += a.get("dup_on_disk", 0)
             e["session_details"].append({
                 "session": s["idx"], "album_idx": a["idx"], "running": running,
                 "session_start": s["start"], "start": a["start"], "end": a["end"],
