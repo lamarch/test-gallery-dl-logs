@@ -152,9 +152,21 @@ to the first rejection line in the Log tab** (rejection-only filter enabled). Pa
 `You've been temporarily blocked from viewing images.`, `AuthRequired` /
 `AuthorizationError` / `AuthenticationError` / `Invalid login credentials` /
 `cookies needed`, `ChallengeError` / captcha names, `HttpError` 401/403/429,
-`429 Too Many Requests`, `This content isn't available`. Paste any undetected
-rejection line to add its pattern. (`[429/500]` progress lines deliberately do NOT
-match.)
+`429 Too Many Requests`, `This content isn't available`,
+`Failed to find photo download URL for … Skipping` (the extractor gave up on
+that photo — the `Retrying in N seconds` variant deliberately does NOT match,
+because its paired `Waiting … (429 Too Many Requests)` line is already counted
+once). Paste any undetected rejection line to add its pattern. (`[429/500]`
+progress lines deliberately do NOT match.)
+
+**Log formats handled** (source-audited against gallery-dl 1.32.21: `facebook.py`,
+`job.py`, extractor `common.py` `wait()`/`sleep()`, `downloader/http.py`):
+`Sleeping N.NN seconds (reason)` + `Waiting for N [seconds|minutes|hours] until
+HH:MM:SS (reason)` + the combined `Waiting for 2h 5min until ...` variant;
+`Failed to download <filename>` with **or without** quotes (1.32.21 logs it
+unquoted); multi-line messages (`AuthRequired` / `AbortExtraction` and their
+"use this URL to continue" continuation lines) — the continuation lines have no
+`[channel][level]` prefix and are excluded from the stats `downloads` counter.
 
 Log line format handled (verified against gallery-dl 1.32.21 output):
 `[2026-11-22 18:40:12] [facebook][debug] …` and the default `[facebook][debug] …`;
