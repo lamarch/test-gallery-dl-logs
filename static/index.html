@@ -990,7 +990,9 @@ function renderCompare(cmp) {
   h.textContent = "Albums comparison (albums.txt x logs x disk): " +
     (c.done || 0) + " done · " + (c.incomplete || 0) + " unfinished (started, not done) " +
     "· " + (c.not_started || 0) + " remaining (in file, never started) " +
-    "· " + (c.not_in_file || 0) + " not in file · " + (c.total || 0) + " total";
+    "· " + (c.not_in_file || 0) + " not in file · " + (c.total || 0) + " total" +
+    (c.dup_album_ids ? " · ⚠ " + c.dup_album_ids + " duplicated album id" +
+                       (c.dup_album_ids > 1 ? "s" : "") : "");
   if (!cmp.albums || !cmp.albums.length) { el.replaceChildren(h); return; }
   const table = document.createElement("table");
   table.className = "files-table compare-table";
@@ -999,6 +1001,7 @@ function renderCompare(cmp) {
     '<th title="Present in albums.txt; # prefix = marked done by gallery-dl">albums.txt</th>' +
     '<th title="A Starting DownloadJob line for this album was seen in the logs">in logs</th>' +
     '<th title="Files indexed on disk under this album&#39;s directory">on disk</th>' +
+    '<th title="Same album id (set=a.) seen more than once: several albums.txt entries, several on-disk directories, or several distinct URLs started in the logs for the same album">duplicates</th>' +
     '<th title="Newest log activity + total duration of its sessions (disk mtimes are EXIF-synced photo dates, not real activity, so they are ignored)">activity</th>' +
     "<th>status</th></tr></thead>";
   const tb = document.createElement("tbody");
@@ -1016,6 +1019,7 @@ function renderCompare(cmp) {
         : "—") + "</td>" +
       "<td>" + (a.in_logs ? badge("✓", "done", "Started at least once in the logs") : "—") + "</td>" +
       "<td class='stat'>" + a.on_disk + "</td>" +
+      "<td>" + dupBadges(a) + "</td>" +
       '<td class="stat">' +
       (a.last_activity ? esc(fmtEpoch(a.last_activity)) : "—") +
       (a.total_duration_s ? " · ⏱ " + fmtDur(a.total_duration_s) : "") +
@@ -1025,6 +1029,19 @@ function renderCompare(cmp) {
   }
   table.appendChild(tb);
   el.replaceChildren(h, table);  // single swap
+}
+function dupBadges(a) {  // duplicated album-id markers for one compare row
+  const parts = [];
+  if ((a.file_dup || 1) > 1)
+    parts.push(badge("✗×" + a.file_dup, "rejected",
+      a.file_dup + " albums.txt entries share this album id"));
+  if ((a.disk_dup || 1) > 1)
+    parts.push(badge("⁄×" + a.disk_dup, "rejected",
+      a.disk_dup + " on-disk directories under this album id"));
+  if ((a.log_url_dup || 1) > 1)
+    parts.push(badge("↻×" + a.log_url_dup, "rejected",
+      a.log_url_dup + " distinct URLs started for this album id in the logs"));
+  return parts.length ? parts.join(" ") : "—";
 }
 function cardDur(a) {  // total duration over the album's session spans
   let tot = 0;

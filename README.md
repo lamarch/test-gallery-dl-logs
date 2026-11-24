@@ -126,7 +126,11 @@ activity + total session duration** (disk mtimes are ignored on purpose: the EXI
 script syncs them to the photo shoot date, which reads as "a year ago"), status -
 with a counts line separating
 **unfinished** (started, not done) from **remaining** (in albums.txt, never started)
-and **not_in_file** (seen in logs/on disk but absent from albums.txt). Below, one card
+and **not_in_file** (seen in logs/on disk but absent from albums.txt). A
+**duplicates** column flags album ids (set=a.) seen more than once per source
+(suspicious entries sharing an id, several on-disk directories, or several
+distinct URLs started for the same id), with a `N duplicated album ids` warning
+in the counts line. Below, one card
 per album (keyed by set id, not chronological) listing **each session** that touched
 it - expandable to show **that session's photos** (paginated, 3-line rows, per-photo
 logs) - plus a **retried** badge when an album appears in more than one session (e.g.

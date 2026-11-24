@@ -186,7 +186,7 @@ class ApiTests(unittest.TestCase):
         # 3 entries in albums.txt; the log/disk album is SET_URL -> no extra
         self.assertEqual(data["counts"],
                          {"done": 1, "incomplete": 1, "not_started": 1,
-                          "not_in_file": 0, "total": 3})
+                          "not_in_file": 0, "total": 3, "dup_album_ids": 0})
         self.assertEqual(data["current"], SET_URL)
         by_url = {a["url"]: a["status"] for a in data["albums"]}
         self.assertEqual(by_url["https://example.com/done"], "done")
@@ -907,6 +907,59 @@ class OpsLoggingTests(unittest.TestCase):
             self.assertTrue(any("decodable" in l for l in lg.output))
         finally:
             os.remove(bad)
+
+
+class AlbumIdDuplicatesTests(unittest.TestCase):
+    """The comparison table must flag album ids seen more than once per
+    source: several albums.txt entries, several on-disk directories, or
+    several distinct URLs started in the logs for the same set id."""
+
+    def setUp(self):
+        from fastapi.testclient import TestClient
+        self.client = TestClient(app)
+        self._orig_log = open(LOG_FILE, encoding="utf-8").read()
+        self._orig_albums = open(ALBUMS_FILE, encoding="utf-8").read()
+        variant = "https://www.facebook.com/media/set?vanity=user43&set=a." + SET_ID
+        lines = [
+            "[2026-12-04 10:00:00] [gallery-dl][debug] Version 1.32.21",
+            "[2026-12-04 10:00:01] [gallery-dl][debug] Starting DownloadJob for '" + SET_URL + "'",
+            "[2026-12-04 10:00:02] [gallery-dl][debug] Version 1.32.21",
+            "[2026-12-04 10:00:03] [gallery-dl][debug] Starting DownloadJob for '" + variant + "'",
+        ]
+        with open(LOG_FILE, "w", encoding="utf-8") as f:
+            f.write("\n".join(lines) + "\n")
+        # two albums.txt entries for the same set id (one already done)
+        with open(ALBUMS_FILE, "w", encoding="utf-8") as f:
+            f.write(SET_URL + "\n")
+            f.write("# https://www.facebook.com/media/set?set=a." + SET_ID + "&vanity=user43\n")
+        # second on-disk directory for the same album id, under another user
+        self.dup_dir = os.path.join(DOWNLOADS_DIR, "facebook", "user43",
+                                    f"Copy 2025 (a.{SET_ID})")
+        os.makedirs(self.dup_dir)
+        with open(os.path.join(self.dup_dir, "20260104_100000_555000111222333.jpg"), "wb") as f:
+            from PIL import Image
+            Image.new("RGB", (2, 2), (1, 1, 1)).save(f, "JPEG")
+        clear_caches()
+
+    def tearDown(self):
+        with open(LOG_FILE, "w", encoding="utf-8") as f:
+            f.write(self._orig_log)
+        with open(ALBUMS_FILE, "w", encoding="utf-8") as f:
+            f.write(self._orig_albums)
+        import shutil
+        shutil.rmtree(self.dup_dir, ignore_errors=True)
+        clear_caches()
+
+    def test_duplicates_flagged_per_source(self):
+        data = self.client.get("/api/albums").json()
+        self.assertEqual(data["counts"]["dup_album_ids"], 1)
+        rows = data["albums"]
+        self.assertEqual(len(rows), 2)          # one row per albums.txt entry
+        for r in rows:
+            self.assertEqual(r["file_dup"], 2)   # both entries share the set id
+            self.assertEqual(r["disk_dup"], 2)  # user42 + user43 directories
+            self.assertEqual(r["log_url_dup"], 2)  # SET_URL + vanity variant
+
 
 
 class FilesApiTests(unittest.TestCase):
