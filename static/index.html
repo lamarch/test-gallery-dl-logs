@@ -660,7 +660,7 @@ function sessionNode(s, isLast) {
     ' <small class="stat">' + esc(fmtTs(s.start)) + " → " + esc(fmtTs(s.end)) +
     (isFinite(dur) ? " · ⏱ " + fmtDur(dur / 1000) : "") + "</small></div>" +
     '<div class="n-l2">' + countersLine(s.photos_n, s.states) +
-    ' <span class="cnt" title="Cumulative sleep time in this session (sleep-request / download / extractor…)">💤 <b>' + s.sleeps.toFixed(1) + 's</b> sleep</span>' +
+    ' <span class="cnt" title="Cumulative sleep time in this session (sleep-request / download / extractor…)">💤 <b>' + fmtDur(s.sleeps) + '</b> sleep</span>' +
     ' <span class="cnt" title="Bytes downloaded (CDN payloads) in this session">💾 <b>' + humanSize(s.bytes) + "</b></span>" +
     ' <span class="cnt" title="Total size of this session\'s files on disk">💽 <b>' + humanSize(s.on_disk_size || 0) + "</b></span></div>" +
     '<div class="n-l3"><span class="stat">mtime ' +
@@ -713,7 +713,7 @@ function albumLinesHtml(d, mode) {
       (isFinite(dur) ? " · ⏱ " + fmtDur(dur) : "") + "</small></div>";
   }
   const l2 = '<div class="n-l2">' + countersLine(d.detected, d.states) +
-    ' <span class="cnt" title="Cumulative sleep time">💤 <b>' + (d.sleeps || 0).toFixed(1) + 's</b> sleep</span>' +
+    ' <span class="cnt" title="Cumulative sleep time">💤 <b>' + fmtDur(d.sleeps || 0) + '</b> sleep</span>' +
     ' <span class="cnt" title="Bytes downloaded (CDN payloads)">💾 <b>' + humanSize(d.bytes || 0) + "</b></span>" +
     ' <span class="cnt" title="Total size of this album\'s files on disk">💽 <b>' + humanSize(d.on_disk_size || 0) + "</b></span>" +
     (d.missing_on_disk ? ' <span class="cnt" title="Downloaded in logs but not on disk">⚠ <b>' + d.missing_on_disk + "</b> missing</span>" : "") +
