@@ -82,11 +82,11 @@ a.cnt{text-decoration:none}
 .tnode.photo>.logspane{flex-basis:100%}
 .view .controls{position:sticky;top:0;z-index:20;background:var(--panel);
   box-shadow:0 1px 2px rgba(16,24,40,.06)}
-.node-session>summary{position:sticky;top:0;z-index:15;background:var(--panel);
-  box-shadow:0 1px 0 var(--border)}
-.card>h3{position:sticky;top:0;z-index:15;margin:0;background:var(--panel);
-  box-shadow:0 1px 0 var(--border)}
+  .node-session>summary{position:sticky;z-index:15;background:var(--panel);box-shadow:0 1px 0 var(--border)}
+  .card>h3{position:sticky;z-index:15;margin:0;background:var(--panel);box-shadow:0 1px 0 var(--border)}
 small.stat{color:var(--muted);font-size:.82em}
+  .node-album>summary{position:sticky;z-index:14;background:var(--panel);box-shadow:0 1px 0 var(--border)}
+  .card details.tnode>summary{position:sticky;z-index:14;background:var(--panel);box-shadow:0 1px 0 var(--border)}
 .photo:hover{background:#f1f3f5}
 .copy-btn{padding:0 6px;font-size:11px;line-height:1.5;margin-left:2px}
 .logs-btn{font-size:11px;padding:1px 8px}
@@ -641,11 +641,15 @@ function sessionNode(s, isLast) {
   det.className = "tnode node-session";
   det.dataset.key = "s" + s.idx;
   const dur = tsEpoch(s.end) - tsEpoch(s.start);
-  const st = s.rejections ? "banned" : (isLast ? "running" : "ended");
-  const stCls = s.rejections ? "banned" : (isLast ? "running" : "pending");
-  const stTitle = s.rejections ? "Scraping rejection(s) detected in this session"
-    : (isLast ? "Most recent session (a container restart starts a new session)"
-              : "Session ended (a newer 'Version' line follows)");
+  const unres = (s.rejections_unresolved || 0) > 0;
+  const st = (s.rejections && unres) ? "banned" : (isLast ? "running" : "ended");
+  const stCls = (s.rejections && unres) ? "banned" : (isLast ? "running" : "pending");
+  const stTitle = (s.rejections && unres)
+    ? "Scraping rejection(s) detected in this session, none recovered"
+    : (s.rejections
+       ? "Rejection(s) recovered by a later successful download (or file on disk)"
+       : (isLast ? "Most recent session (a container restart starts a new session)"
+                 : "Session ended (a newer 'Version' line follows)"));
   const sum = document.createElement("summary");
   sum.innerHTML =
     '<div class="n-l1">💼 <b>Session #' + s.idx + "</b> " +
@@ -686,6 +690,7 @@ function albumNode(s, a, auto) {
   sum.innerHTML =
     '<div class="n-l1">📁 ' + nameAndLink + " " +
     statusBadgeOf(a.status, a.end_reason) +
+    (a.retried ? ' <span class="cnt" title="seen in more than one session">retried</span>' : "") +
     (a.link ? ' <a class="cnt" href="' + esc(a.link) + '" target="_blank" rel="noopener" title="Open this album in Facebook (browser link)">facebook</a>' : "") +
     (a.set_id ? ' <span class="stat" title="album set id — click the button to copy it">' + esc(a.set_id) + "</span>" : "") +
     ' <small class="stat">' + esc(fmtTs(a.start)) + " → " + esc(fmtTs(a.end)) +
@@ -693,7 +698,13 @@ function albumNode(s, a, auto) {
     '<div class="n-l2">' + countersLine(a.photos_n, a.states) +
     ' <span class="cnt" title="Cumulative sleep time for this album">💤 <b>' + a.sleeps.toFixed(1) + 's</b> sleep</span>' +
     ' <span class="cnt" title="Bytes downloaded (CDN payloads) for this album">💾 <b>' + humanSize(a.bytes) + "</b></span>" +
-    ' <span class="cnt" title="Total size of this album\'s files on disk">💽 <b>' + humanSize(a.on_disk_size || 0) + "</b></span></div>" +
+    ' <span class="cnt" title="Total size of this album\'s files on disk">💽 <b>' + humanSize(a.on_disk_size || 0) + "</b></span>" +
+    (a.missing_on_disk ? ' <span class="cnt" title="Downloaded in logs but not on disk">⚠ <b>' + a.missing_on_disk + "</b> missing</span>" : "") +
+    (a.extra_on_disk ? ' <span class="cnt" title="On disk but never downloaded in logs">➕ <b>' + a.extra_on_disk + "</b> extra</span>" : "") +
+    (a.errors ? ' <span class="cnt">✖ <b>' + a.errors + "</b></span>" : "") +
+    (a.rejections ? ' <span class="cnt">🚫 <b>' + a.rejections + "</b></span>" : "") +
+    (a.rejections_unresolved ? ' <span class="cnt" title="Rejected photos never downloaded later">🚫 <b>' + a.rejections_unresolved + "</b> unresolved</span>" : "") +
+    "</div>" +
     '<div class="n-l3"><span class="stat">mtime ' +
     ((a.first_mtime || a.max_mtime) ? esc(fmtEpoch(a.first_mtime || a.max_mtime)) : "—") +
     (a.vanity ? ' <span class="stat" title="vanity id">vanity ' + esc(a.vanity) + "</span>" : "") +
@@ -826,11 +837,38 @@ function renderTree() {
   for (const d of root.querySelectorAll("details.tnode[data-key]"))  // parents come first
     if (openKeys.has(d.dataset.key)) d.open = true;
   keepScroll(view, scroll);
+  stackSticky("view-tree");
   treeBooted = true;
   const albums = t.sessions.reduce((n, s) => n + s.albums.length, 0);
   const photos = t.sessions.reduce((n, s) => n + s.photos_n, 0);
   $("tree-count").textContent = t.sessions.length + " session(s) · " + albums + " album(s) · " + photos + " photo(s)";
 }
+function stackSticky(viewId) {
+  // stack the sticky headers: controls bar -> session/album -> card/session row,
+  // each pinned just below the one above it (measured, so nothing overrides)
+  const view = $(viewId);
+  const ctl = view && view.querySelector(".controls");
+  if (!view || !ctl) return;
+  const ctlH = ctl.offsetHeight;
+  view.querySelectorAll("details.node-session").forEach((sdet) => {
+    const ssum = sdet.querySelector(":scope > summary");
+    ssum.style.top = ctlH + "px";
+    sdet.querySelectorAll("details.node-album").forEach((adet) => {
+      adet.querySelector(":scope > summary").style.top = (ctlH + ssum.offsetHeight) + "px";
+    });
+  });
+  view.querySelectorAll(".card").forEach((card) => {
+    const h3 = card.querySelector(":scope > h3");
+    if (!h3) return;
+    h3.style.top = ctlH + "px";
+    card.querySelectorAll("details.tnode > summary").forEach((sum) => {
+      sum.style.top = (ctlH + h3.offsetHeight) + "px";
+    });
+  });
+}
+window.addEventListener("resize", () => {
+  ["log", "tree", "albums", "compare", "files"].forEach((t) => stackSticky("view-" + t));
+});
 function applyTreeFilter(q) {
   for (const el of $("tree-root").querySelectorAll(".tnode"))
     el.classList.toggle("hidden", !!q && !el.textContent.toLowerCase().includes(q));
@@ -998,6 +1036,7 @@ function renderOverview() {
   }
   root.replaceChildren(frag);  // single swap: no intermediate empty-list flash
   applyAlbumsFilter($("albums-q").value.trim().toLowerCase());
+  stackSticky("view-albums");
   for (const d of view.querySelectorAll("details.tnode[data-key]"))
     if (openKeys.has(d.dataset.key)) d.open = true;
   keepScroll(view, scroll);

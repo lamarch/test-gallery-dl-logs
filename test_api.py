@@ -350,12 +350,17 @@ class TreeApiTests(unittest.TestCase):
         self.assertEqual(len(t["sessions"]), 2)
         s0, s1 = t["sessions"]
         self.assertEqual(s0["start"], "2026-11-22 18:40:12")
+        self.assertGreater(s0["on_disk_size"], 0)  # per-session on-disk size
+        self.assertEqual(s0["rejections_unresolved"], 0)
+        self.assertEqual(s1["rejections_unresolved"], 0)  # rejection recovered
         self.assertEqual(s0["albums"][0]["set_id"], SET_ID)
         self.assertEqual(s0["albums"][0]["vanity"], "61580320494056")
         self.assertEqual(s0["albums"][0]["link"],
                          f"https://www.facebook.com/media/set/?set=a.{SET_ID}&type=3")
         a0 = s0["albums"][0]
         self.assertEqual(a0["name"], "Vacances 2025")     # download dir title (as downloaded)
+        self.assertTrue(a0["retried"])   # the SET album appears in sessions 0 and 1
+        self.assertEqual(a0["extra_on_disk"], 3)  # on disk, never downloaded in logs
         self.assertEqual(a0["on_disk"], 4)                # log-vs-disk annotation (4 files in dir)
         self.assertEqual(a0["missing_on_disk"], 0)        # its only photo is on disk
         # full = on disk AND CDN payload in logs; foreign = on disk, never in logs
@@ -604,6 +609,8 @@ class RejectionRecoveryTests(unittest.TestCase):
         t = self.client.get("/api/tree").json()
         s0, s1 = t["sessions"]
         p0 = s0["albums"][0]["photos"][0]
+        self.assertTrue(s0["albums"][0]["retried"])   # retried across the 2 sessions
+        self.assertEqual(s0["rejections_unresolved"], 0)
         self.assertTrue(p0["rejected"])
         self.assertEqual(p0["state"], "rejected")     # visible even if re-downloaded
         p1 = s1["albums"][0]["photos"][0]             # second try: downloaded fine
