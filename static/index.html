@@ -63,9 +63,10 @@ summary::-webkit-details-marker{display:none}
 .chev{padding:0 7px;margin:0 2px 0 -4px;border-radius:.25rem}
 .chev::before{content:"\25B8"}
 details[open]>summary .chev::before{content:"\25BE"}
-.cnt[data-chip]{cursor:pointer}
+.cnt[data-chip]{cursor:pointer;user-select:none}
 .cnt[data-chip]:hover{outline:1px dashed var(--muted);outline-offset:1px}
-.chip-restore{color:var(--muted);font-style:italic}
+.cnt[data-chip].chip-on{background:var(--blue);color:#fff;border-radius:.375rem}
+.cnt[data-chip].chip-on b{color:#fff}
 summary:hover{background:#e9ecef}
 .badge{display:inline-block;padding:.15em .6em;border-radius:.375rem;font-size:11px;font-weight:600;border:1px solid transparent;white-space:nowrap}
 .badge.done,.badge.downloaded{color:#fff;background:var(--ok);border-color:var(--ok)}
@@ -593,59 +594,26 @@ function countersHtml(states, d) {  // ... / foreign / dup in logs / dup on disk
     const k = kv[0], label = kv[1];
     const meta = STATE_META[k === "dup_in_logs" ? "dup_logs" : k === "dup_on_disk" ? "dup_disk" : k];
     const n = (d && d[k]) || (states && states[k]) || 0;
-    return chip(k, '<span class="cnt" title="' + esc(meta.title) + ' · click to hide">' + meta.icon +
+    return chip(k, '<span class="cnt" title="' + esc(meta.title) + '">' + meta.icon +
       " " + label + " <b>" + n + "</b></span>");
   }).join(" ");
 }
-// per-chip visibility: every count-line chip hides itself on click
-// (persisted in localStorage). One registry, all views. The "+N hidden"
-// chip at the end of the line restores everything.
-const CHIP_LABELS = {
-  detected: "Detected", full: "On-disk", downloaded: "Downloaded",
-  interrupted: "Interrupted", missing: "Missing", already: "Already",
-  rejected: "Rejected", foreign: "Foreign",
-  dup_in_logs: "Dup logs", dup_on_disk: "Dup disk",
-  sleep: "sleep", bytes: "bytes", on_disk_size: "on-disk size",
-  missing_on_disk: "missing on disk", extra_on_disk: "extra on disk",
-  errors: "errors", rejections: "rejections",
-  rejections_unresolved: "unresolved", sessions: "sessions list",
-};
-let chipHidden = new Set(JSON.parse(localStorage.getItem("fbdl-chip-hidden") || "[]"));
+// count-line chips are toggle buttons: clicking flips a pressed look on
+// that element only - no hiding, no persistence, no side effects (a purely
+// visual marker, per instance)
 function chip(id, html) {
-  if (chipHidden.has(id)) return "";
   return html.replace("<span ", '<span data-chip="' + id + '" ', 1);
 }
-function chipRerender() {
-  if (tab === "tree") renderTree();
-  else if (tab === "albums") renderOverview();
-}
-// the chevron is a button inside a <summary>: browsers do not fold on
-// interactive descendants, so it toggles the details itself (every view)
-document.addEventListener("click", (e) => {
-  const b = e.target.closest("button.chev");
-  if (b) {
-    e.preventDefault();
-    e.stopPropagation();
-    const det = b.closest("details");
-    if (det) det.open = !det.open;
-  }
-});
 document.addEventListener("click", (e) => {
   const c = e.target.closest(".cnt[data-chip]");
   if (c) {
     e.preventDefault();
     e.stopPropagation();
-    if (c.classList.contains("chip-restore")) {
-      chipHidden.clear();
-    } else {
-      chipHidden.add(c.dataset.chip);
-    }
-    localStorage.setItem("fbdl-chip-hidden", JSON.stringify([...chipHidden]));
-    chipRerender();
+    c.classList.toggle("chip-on");
   }
 });
 function countersLine(detected, states, d) {
-  return chip("detected", '<span class="cnt" title="Photo pages detected in the logs (all sessions of this album) · click to hide">🖼 Detected <b>' +
+  return chip("detected", '<span class="cnt" title="Photo pages detected in the logs (all sessions of this album)">🖼 Detected <b>' +
     (detected || 0) + "</b></span> ") + countersHtml(states, d);
 }
 function exifCountsHtml(setKey) {
@@ -797,9 +765,6 @@ function albumLinesHtml(d, mode) {
     chip("rejections", (d.rejections ? ' <span class="cnt">🚫 <b>' + d.rejections + "</b></span>" : "")) +
     chip("rejections_unresolved", (d.rejections_unresolved ? ' <span class="cnt" title="Rejected photos never downloaded later">🚫 <b>' + d.rejections_unresolved + "</b> unresolved</span>" : "")) +
     chip("sessions", (d.sessions ? "<br>sessions: " + d.sessions.map(x => "#" + x).join(", ") : "")) +
-    (chipHidden.size ? '<span class="cnt chip-restore" data-chip="" title="' +
-      esc([...chipHidden].map(h => CHIP_LABELS[h] || h).join(", ")) +
-      ' hidden · click to restore all">+' + chipHidden.size + " hidden</span>" : "") +
     "</div>";
   const l3 = '<div class="n-l3"><span class="stat">mtime ' +
     ((d.first_mtime || d.max_mtime) ? esc(fmtEpoch(d.first_mtime || d.max_mtime)) : "—") + "</span>" +
