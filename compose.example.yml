@@ -25,6 +25,9 @@ services:
       TREE_MAX_PHOTOS: "50000"              # RAM cap on materialized photo nodes in the parsed tree; beyond it, albums are re-parsed from their log span on demand
       DISPLAY_TZ: "Europe/Paris"            # log timestamps are UTC; the UI displays them in this IANA timezone (falls back to TZ, then UTC). EXIF DateTimeOriginal is also interpreted in this zone
       EXIF_TOLERANCE_S: "2"                 # |mtime - exif| tolerance for the exif "synced" state
+      EXIF_PRECOMPUTE: "1"                  # background EXIF scan of the disk (feeds /api/exif_stats and the album EXIF counts in the tree); "0" disables
+      EXIF_SCAN_BATCH: "500"                # max new files EXIF-read per precompute pass (progressive, so big libraries fill in over time)
+      EXIF_SCAN_INTERVAL: "10"              # seconds between precompute passes
       FILES_CACHE_TTL: "30"                 # seconds the disk index (/api/files) is cached before an automatic rescan (0 = rescan every call)
     volumes:
       - ./downloads-2:/downloads:ro         # same mount as fb-dl, read-only

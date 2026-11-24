@@ -3,8 +3,8 @@
 The UI is a single self-contained page (no external CDN — it must work on a private
 Docker network), styled like classic Bootstrap (light theme, cards, badges, pill chips,
 buttons) for readability and contrast. Every stat segment has a tooltip explaining its
-source, and the browser back/forward buttons navigate tabs and `#album=<set_id>`
-permalinks (History API). Dates render `DD/MM/YY HH:MM:SS` in `DISPLAY_TZ`.
+source, and the browser back/forward buttons navigate tabs and `#album=<set_id>` /
+`#file=<path>` permalinks (History API). Dates render `DD/MM/YY HH:MM:SS` in `DISPLAY_TZ`.
 
 This repo is the **content of the `web-dashboard/` folder** of your gallery-dl
 project: a self-contained Docker image (Dockerfile at the repo root) that serves a
@@ -69,61 +69,71 @@ Four tabs in the header, plus an **Export JSON** button (`/api/export`: full tre
 albums overview + disk index as a downloadable attachment).
 
 ### Log
-- **Fast by default, full history on demand**: initial load reads only the last 1000
-  lines (`/api/logs?tail=N`, windowed server-side read); older lines load with the
-  "⤒ Load earlier" button (`/api/logs?before=OFFSET&limit=N`, backwards chunks);
-  the whole file from byte 0 remains available via `/api/logs?offset=0&limit=N`.
-  Live follow via SSE (`/api/stream`, green dot = connected). DOM capped at
-  `MAX_RENDER_LINES`.
-- **Parsed view**: toggle Raw/Parsed — log lines become structured entries
-  (💤 sleeping Xs (reason), ▶ job/album start, 🔍 extractor, 🌐 GET → status+size,
-  💾 downloaded file, ❌ failed download, 🚫 scraping rejection, …).
+- **Opens scrolled at the END of the file** (live tail). Older history loads with the
+  "⏒ Load earlier" button (`/api/logs?before=OFFSET&limit=N`, backwards chunks);
+  the whole file from byte 0 remains available via `/api/logs?offset=0&limit=N`
+  (`/api/logs?tail=N` for the last N lines). Live follow via SSE (`/api/stream`,
+  green dot = connected). DOM capped at `MAX_RENDER_LINES`.
 - Search over the whole scanned file (count + matches), level filters, full-text
   filter, pause, auto-scroll, raw log download (`/api/raw`).
 
-### Status bar (chips under the header, refreshed every 5 s)
-Current sleep with reason + estimated wake-up, current run #N (restart counter) and
-its start time, current album + files downloaded on it, albums done/total
-(done ◐ incomplete ○ not-started), total files, errors, rejections, last log activity.
+### Status banner (fixed 3-line panel under the header, refreshed every 5 s via textContent - no flicker)
+- **Line 1**: files on disk / photos detected in logs / files downloaded (CDN payloads) /
+  albums: *unfinished* (started, not `#`-marked) - *remaining* (in albums.txt, never
+  started) - total (done).
+- **Line 2**: current sleep + reason + wake-up time / current album (click opens it in
+  the Albums view via `#album=<set_id>`).
+- **Line 3**: errors / rejections / last activity / log size, lines, display timezone.
 
-### Tree — session → album → photo
+### Tree - session -> album -> photo, 3 lines per node
 The log is parsed into a tree. **Each run = one session branch** (a new branch starts
-at every `[gallery-dl][debug] Version …` line, so restarts/power cuts are visible):
-- **Session**: start/end, photos, files, bytes, total sleep time, errors, rejections.
-- **Album**: Facebook browser link `https://www.facebook.com/media/set/?set=a.<id>&type=3`,
-  set id + vanity, start/end, end reason (done per `albums.txt` `#` marker / banned /
-  error / interrupted), status badge, same stats, an "album logs" button showing the
-  exact raw log lines of that album.
-- **Photos**: lazy-loaded and **paginated** (`PHOTOS_PAGE_SIZE=500` per page +
-  "load more", so albums with thousands of photos stay fast). Per photo: status
-  (downloaded / failed / pending), fbid with browser link
-  `https://www.facebook.com/photo/?fbid=<id>&set=a.<set_id>`, bytes, download sleep,
-  on-disk state. Expanding a photo shows its **EXIF/mtime state** and its **own raw
-  log lines** (`/api/photo/{s}/{a}/{p}/logs`).
+at every `[gallery-dl][debug] Version ...` line, so restarts/power cuts are visible).
+Only the most recent session/album auto-expands. The tree **live-refreshes** (expanded
+nodes and scroll position are preserved) and has a **filter box** (album name / set id /
+fbid). Each node (session / album / photo) renders 3 lines:
+- **Line 1**: icon + label (Session #N / album name + `a.<id>` / photo fbid) + a
+  **copy-ID button**, start -> end, **duration**, status badge.
+- **Line 2**: the 5 counters **Full / Interrupted / Missing / Already / Foreign**
+  (counts for a session/album, the state badge for a photo) + sleep + downloaded size +
+  FB browser link + `#album=<set_id>` link (album) **XOR** `#file=<path>` link (photo,
+  opens the Files tab filtered on it) + a **logs** button (raw log span of that node:
+  `/api/session/{s}/logs`, `/api/album/{s}/{a}/logs`, `/api/photo/{s}/{a}/{p}/logs`).
+- **Line 3**: photo -> filename, name-date, mtime, EXIF time + status chip; album ->
+  most recent mtime + EXIF status counts (background precompute, see below).
+- **Expanding an album also expands its photos** (paginated by `PHOTOS_PAGE_SIZE=500`
+  with "load more", so huge albums stay fast); each photo shows a **40 px thumbnail**.
+- Album status: done per `albums.txt` `#` marker / banned / error / interrupted, with
+  the end reason as tooltip. Photo FB browser link:
+  `https://www.facebook.com/photo/?fbid=<id>&set=a.<set_id>`.
 
-### Albums — cross-session view
-Album-centric (keyed by set id, not chronological): which sessions touched it — each
-session is listed and expandable, showing **that session's photos** (paginated, with
-status, fbid links, on-disk state and per-photo logs) — a
-**retried** badge when an album appears in more than one session (e.g. after a crash
-or an anti-bot ban), total photos/files/bytes/sleeps, errors, rejections, and how
-many files are actually on disk. Deep-linkable with `#album=<set_id>` anchors.
+### Albums - 3-way comparison + cross-session view
+Top table compares **albums.txt x logs x disk** per album: in albums.txt (done `#` /
+pending / -), started in logs, files on disk, status - with a counts line separating
+**unfinished** (started, not done) from **remaining** (in albums.txt, never started)
+and **not_in_file** (seen in logs/on disk but absent from albums.txt). Below, one card
+per album (keyed by set id, not chronological) listing **each session** that touched
+it - expandable to show **that session's photos** (paginated, 3-line rows, per-photo
+logs) - plus a **retried** badge when an album appears in more than one session (e.g.
+after a crash or an anti-bot ban), the 5 state counters, totals, errors/rejections.
+Deep-linkable with `#album=<set_id>` anchors; filter box on top.
 
-### Files — disk view
+### Files - disk view
 Read-only index of `DOWNLOADS_DIR` (the `logs/` dir is skipped). Expected layout
-`downloads/facebook/<user>/<album title> (a.<set_id>)/YYYYMMDD_HHMMSS_<fbid>.<ext>` —
-the album set id **and title** come from the `(a.…)` directory, the photo fbid and the
+`downloads/facebook/<user>/<album title> (a.<set_id>)/YYYYMMDD_HHMMSS_<fbid>.<ext>` -
+the album set id **and title** come from the `(a. ...)` directory, the photo fbid and the
 capture date from the filename. Lightweight server-side thumbnails
-(`/api/thumb?path=…&w=120`, so no full-HD download per row), filters by album /
-name / fbid / **EXIF state** / **not in logs**, per-row EXIF button, rescan button.
+(`/api/thumb?path=...&w=120`, so no full-HD download per row), filters by album /
+name / fbid / **log state** (full / already / foreign) / **EXIF state**, per-row EXIF
+button, rescan button. A `#file=<path>` link (from the tree) opens this tab prefilled
+and scrolls/highlights the row.
 
 **EXIF check** (`/api/exif`): compares EXIF `DateTimeOriginal` with the file mtime
 (±2 s): `synced` / `mismatch` / **`no_exif` — meaning your external EXIF/mtime script
 did not run on that file** — plus the date parsed from the filename.
 
 ### Scraping rejection detection
-Rejection-pattern lines are counted and shown with a red banner — click it to show
-only those lines. Patterns based on gallery-dl 1.32.21's Facebook extractor:
+Rejection-pattern lines are counted and shown with a red banner — **click it to jump
+to the first rejection line in the Log tab** (rejection-only filter enabled). Patterns based on gallery-dl 1.32.21's Facebook extractor:
 `You've been temporarily blocked from viewing images.`, `AuthRequired` /
 `AuthorizationError` / `AuthenticationError` / `Invalid login credentials` /
 `cookies needed`, `ChallengeError` / captcha names, `HttpError` 401/403/429,
@@ -162,6 +172,9 @@ skip) or when the file was already there from a previous run.
 | `TREE_MAX_PHOTOS` | `50000` | RAM cap on photo nodes materialized in the parsed tree (`<= 0` = unlimited). Beyond the cap, photos are still counted and `/api/album/{s}/{a}` re-parses the album's log span on demand (per-photo log spans keep working) |
 | `DISPLAY_TZ` | `TZ` env, else `UTC` | IANA timezone used to **display** the log timestamps (logs are UTC) **and to interpret EXIF `DateTimeOriginal`** (EXIF has no timezone; `OffsetTimeOriginal` wins if present). UI renders via `Intl`; exposed by `/api/status` as `timezone` |
 | `EXIF_TOLERANCE_S` | `2` | `|mtime − EXIF|` tolerance in seconds for the `synced` state |
+| `EXIF_PRECOMPUTE` | `1` | background EXIF scan of the disk index feeding `/api/exif_stats` and the per-album EXIF counts on tree line 3 (`0` disables the thread) |
+| `EXIF_SCAN_BATCH` | `500` | max new files EXIF-read per precompute pass (progressive: big libraries fill in over successive passes) |
+| `EXIF_SCAN_INTERVAL` | `10` | seconds between precompute passes |
 | `FILES_CACHE_TTL` | `30` | seconds the disk index (`/api/files`) is cached before an automatic rescan, so new downloads show as "on disk" without a manual refresh (`0` = rescan every call, `?refresh=1` forces) |
 | `FILES_MAX` | `50000` | max files indexed by the disk scan (walk stops early, `truncated: true` reported) |
 
@@ -175,14 +188,17 @@ skip) or when the file was already there from a previous run.
 | `GET /api/logs?tail=N` | last N lines (`offset`, `start_offset`, `has_more`) |
 | `GET /api/stream?since=OFFSET` | SSE stream of new lines |
 | `GET /api/search?q=…&limit=N` | search the scanned region, total count + first matches |
-| `GET /api/albums` | albums.txt statuses (done/incomplete/not_started) + counts + `current` |
-| `GET /api/stats` | counters incl. `files`, `current_album`, `current_album_files`, `last_sleep`, `rejections`, `truncated` |
-| `GET /api/tree` | parsed session → album → photo tree (`runs`, `done_urls`, album `name`, `on_disk`, `missing_on_disk`) |
+| `GET /api/albums` | 3-way comparison source: one entry per album with `in_file` / `done` / `in_logs` / `on_disk` / `set_id` / `link` / `name`; albums seen in logs or on disk but absent from albums.txt are appended (`status=not_in_file`); `counts`: done / incomplete (unfinished) / not_started (remaining) / not_in_file / total; `current` |
+| `GET /api/summary` | fixed 3-line banner payload: files on disk, photos detected, downloaded, global 5-state counters, albums (done/unfinished/remaining/total), last sleep + `wake_epoch`, current album (+set/name/link), errors/warnings/rejections, `last_activity`, log size/lines, `timezone` |
+| `GET /api/exif_stats` | aggregated EXIF precompute results: `global` and `by_album` per-state counts (synced/mismatch/no_exif) + `scanned`/`total`/`done` progress |
+| `GET /api/stats` | counters incl. `files`, `current_album`, `current_album_set`, `current_album_files`, `last_sleep`, `last_activity`, `rejections`, `truncated` |
+| `GET /api/tree` | parsed session → album → photo tree (`runs`, `done_urls`), per node: `states` (5-state counters incl. `foreign`), `on_disk`, `max_mtime`, per-photo `state`/`dl`/`path`/`mtime`/`name_date`, album `name`/`missing_on_disk` |
 | `GET /api/album/{s}/{a}?offset=O&limit=N` | one album + its photos (paginated, merged with the disk index: per-photo `on_disk`/`path`/`link_photo`, plus album-level `on_disk` and `missing_on_disk` = fbids downloaded in the log but absent on disk) |
+| `GET /api/session/{s}/logs` | raw log lines of that session (paged like album/photo spans) |
 | `GET /api/album/{s}/{a}/logs` | raw log lines of that album |
 | `GET /api/photo/{s}/{a}/{p}/logs` | raw log lines of that photo |
 | `GET /api/albums_overview` | album-centric cross-session aggregation: `name`, `session_details` (per-session stats so the UI can show per-session photos), `retried`, `on_disk`, `missing_on_disk`, `extra_on_disk`, totals |
-| `GET /api/files?refresh=1` | disk index of `DOWNLOADS_DIR` (images only, `logs/` skipped), each file annotated `in_log` (fbid seen as downloaded in the log) + `in_log_count` |
+| `GET /api/files?refresh=1` | disk index of `DOWNLOADS_DIR` (images only, `logs/` skipped), each file annotated `in_log` (CDN payload seen in the log) + `state` (full/already/foreign) + `in_log_count` |
 | `GET /api/file?path=REL` | serve one image, full size (traversal-safe) |
 | `GET /api/thumb?path=REL&w=160` | server-side resized JPEG thumbnail (Pillow, cached) — used by the Files tab so it does not download full-HD images; same traversal rules |
 | `GET /api/exif?path=REL` | EXIF DateTimeOriginal (Exif sub-IFD, `OffsetTimeOriginal` if present, else `DISPLAY_TZ`) vs mtime → `synced` / `mismatch` / `no_exif` + filename date + `exif_epoch` |
@@ -220,18 +236,23 @@ skip) or when the file was already there from a previous run.
 - **Album names**: taken from the download directory title gallery-dl itself created
   (`…/<title> (a.<id>)`) — i.e. the name as downloaded, nothing to maintain.
   Names show in the Tree and Albums tabs.
-- **Per-photo state** (log signal × disk presence, matched by fbid), shown as a badge
-  on every photo and aggregated per album (`states`): `downloaded` = downloaded per
-  logs **and** on disk (téléchargée + sauvegardée) · `on_disk_only` = on disk but no
-  download line in the log (déjà existante / skipped from a previous run) ·
-  `missing_on_disk` = log says downloaded but the file is not on disk · `failed` =
-  download error (anti-bot rejection, HTTP error, …) · `pending` = page seen, nothing
-  downloaded yet.
-- A photo seen in the log but without a download line (e.g. skipped because the file
-  was already on disk from a previous run) keeps `pending` as its raw log status, and
-  gets the explicit state `on_disk_only` once its fbid is found on disk.
+- **Per-photo state** (crash-safe; log signal x disk presence, matched by fbid), shown as
+  a badge on every photo row and aggregated per album/session (`states`):
+  `full` = on disk **AND** download payload seen in logs (fbcdn.net, HTTP < 400 with
+  bytes) - `already` = on disk, page seen in logs, but no payload (skipped, e.g. from a
+  previous run) - `missing` = CDN payload seen in logs but the file is NOT on disk -
+  `interrupted` = page seen, no completed payload, not on disk (crash mid-write, failed
+  download, ban) - `foreign` = on disk but never seen in any log session. The
+  `Adjusting filename extension` line is deliberately **not** used as proof of download
+  (it only appears when the extension changes, e.g. avif->jpg): adjusting seen but not
+  on disk is still `interrupted`.
+- A photo seen in the log but without a download payload keeps `pending`/`failed` as its
+  raw parsed status, and gets the explicit state `already` / `interrupted` from the rules
+  above once the disk index is crossed.
 - The Tree tab auto-expands only the **most recent** session and album; everything
-  else stays collapsed.
+  else stays collapsed. Tree and Albums live-refresh every 5 s while open, preserving
+  expanded nodes and scroll. Browser back/forward works across tabs and
+  `#album=<set_id>` / `#file=<path>` permalinks (History API).
 
 ## Development / tests
 
