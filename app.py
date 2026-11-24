@@ -65,9 +65,10 @@ DIR_SET_RE = re.compile(r"\((a\.[0-9]+)\)")
 
 # Anti-bot / scraping rejection patterns (gallery-dl 1.32.21 facebook extractor).
 # NOTE: no bare \b429\b — it would match progress lines like "[429/500]".
-# Keep in sync with REJECTION_RE in static/index.html.
-REJECTION_RE = re.compile(
-    r"(?i)temporarily blocked"
+# The pattern body is also served to the UI (see /api/status and /api/summary)
+# so the Python and JS rejection regexes cannot drift apart.
+REJECTION_PATTERN = (
+    r"temporarily blocked"
     r"|blocked from viewing"
     r"|must be logged in|logged in to continue"
     r"|AuthRequired|AuthorizationError|AuthenticationError"
@@ -77,6 +78,7 @@ REJECTION_RE = re.compile(
     r"|HttpError: '(?:401|403|429)"
     r"|content isn't available"
 )
+REJECTION_RE = re.compile(r"(?i)" + REJECTION_PATTERN)
 
 IMAGE_EXTS = {"jpg", "jpeg", "png", "webp", "gif", "avif", "bmp", "mp4", "mov", "webm"}
 
@@ -247,10 +249,12 @@ def _read_albums_file(path):
     return albums
 
 
-def _dir_names():
+def _dir_names(files=None):
     """Fallback album names from download dir names: '.../<title> (a.<id>)'."""
     out = {}
-    for f in scan_downloads()["files"]:
+    if files is None:
+        files = scan_downloads()["files"]
+    for f in files:
         s = f.get("album_set")
         if not s or s in out:
             continue
@@ -269,26 +273,11 @@ def _album_display_name(url, set_id, dirnames):
     return None
 
 
-_started_cache = {"key": None, "value": None}
-
-
 def _started_urls():
-    """URLs for which the scanned log region contains 'Starting ...Job for <url>'."""
-    try:
-        st = os.stat(LOG_FILE)
-        key = (st.st_size, st.st_mtime_ns)
-    except OSError:
-        return set()
-    if _started_cache["key"] == key:
-        return _started_cache["value"]
-    started = set()
-    for line in _iter_log_lines():
-        m = STARTED_RE.search(line)
-        if m:
-            started.add(m.group(1))
-    _started_cache["key"] = key
-    _started_cache["value"] = started
-    return started
+    """URLs for which the scanned log region contains 'Starting ...Job for <url>'.
+    The tree parser already collected them as album nodes."""
+    t, _ = get_tree()
+    return {a["url"] for s in t["sessions"] for a in s["albums"]}
 
 
 @app.get("/api/albums")
@@ -308,9 +297,9 @@ def albums():
         return {"available": False, "path": ALBUMS_FILE, "albums": [],
                 "counts": empty, "current": None}
     started = _started_urls()
-    dirnames = _dir_names()
-    disk_counts = Counter(f.get("album_set") for f in scan_downloads()["files"]
-                          if f.get("album_set"))
+    files = scan_downloads()["files"]
+    dirnames = _dir_names(files)
+    disk_counts = Counter(f.get("album_set") for f in files if f.get("album_set"))
     t, _ = get_tree()
     log_albums = {}
     for s in t["sessions"]:
@@ -375,6 +364,47 @@ def _album_link(url, set_id):
     if set_id:
         return f"https://www.facebook.com/media/set/?set=a.{set_id}&type=3"
     return url
+
+
+def _update_photo_node(p, line):
+    """Match one log line against an in-progress photo node `p` (may be None:
+    the caller then only gets the accounting return values). Updates p's
+    payload / filename / failure / sleep fields and returns (payload_bytes,
+    is_media, sleep_secs, sleep_reason) so callers can do their album/session
+    accounting from the same match without re-running the regexes."""
+    payload = is_media = 0
+    secs = 0.0
+    reason = None
+    rm = RESP_RE.search(line)
+    if rm and int(rm.group(1)) < 400 and rm.group(2):
+        payload = int(rm.group(2))
+        is_media = "fbcdn.net" in line
+        if p is not None:
+            p["bytes"] += payload
+            if is_media:
+                p["status"] = "downloaded"
+                p["dl"] = True
+    dm = DOWNLOAD_RE.search(line)
+    if dm and p is not None:
+        # carries the final filename only; NOT proof of download (it only
+        # appears when the extension changes) -> no dl flag here
+        p["file"] = dm.group(1)
+        fm = FN_ID_RE.search(dm.group(1))
+        if fm and not p["fbid"]:
+            p["fbid"] = fm.group(1)
+    fm = FAILED_RE.search(line)
+    if fm and p is not None:
+        p["status"] = "failed"
+        fid = FN_ID_RE.search(fm.group(1))
+        if fid and not p["fbid"]:
+            p["fbid"] = fid.group(1)
+    sm = SLEEP_RE.search(line)
+    if sm:
+        secs = float(sm.group(1))
+        reason = sm.group(2)
+        if p is not None and reason == "download":
+            p["sleep"] += secs
+    return payload, is_media, secs, reason
 
 
 def _photo_link(fbid, set_id):
@@ -485,53 +515,26 @@ def parse_log():
                     # /api/album/{s}/{a} re-parses this album's span on demand
                     cur_p = None
                     cur_a["photos_truncated"] = True
-            rm = RESP_RE.search(line)
-            if rm:
-                status = int(rm.group(1))
-                nbytes = int(rm.group(2) or 0)
-                if status < 400 and nbytes:
-                    if cur_p is not None:
-                        cur_p["bytes"] += nbytes
+            # one shared match for photo node + album/session accounting
+            payload, media, secs, _reason = _update_photo_node(cur_p, line)
+            if payload:
+                if cur_a is not None:
+                    cur_a["bytes"] += payload
+                if cur_s is not None:
+                    cur_s["bytes"] += payload
+                # a media payload from the CDN = one file actually written.
+                # ("Adjusting filename extension" only appears when the
+                # extension CHANGES, e.g. avif->jpg, so it undercounts)
+                if media:
                     if cur_a is not None:
-                        cur_a["bytes"] += nbytes
+                        cur_a["files"] += 1
                     if cur_s is not None:
-                        cur_s["bytes"] += nbytes
-                    # a media payload from the CDN = one file actually written.
-                    # ("Adjusting filename extension" only appears when the
-                    # extension CHANGES, e.g. avif->jpg, so it undercounts)
-                    if "fbcdn.net" in line:
-                        if cur_p is not None:
-                            cur_p["status"] = "downloaded"
-                            cur_p["dl"] = True  # download payload seen in logs
-                        if cur_a is not None:
-                            cur_a["files"] += 1
-                        if cur_s is not None:
-                            cur_s["files"] += 1
-            dm = DOWNLOAD_RE.search(line)
-            if dm:
-                # carries the final filename only; NOT proof of download (it
-                # only appears when the extension changes) -> no dl flag here
-                fname = dm.group(1)
-                if cur_p is not None:
-                    cur_p["file"] = fname
-                    fm = FN_ID_RE.search(fname)
-                    if fm and not cur_p["fbid"]:
-                        cur_p["fbid"] = fm.group(1)
-            fm = FAILED_RE.search(line)
-            if fm and cur_p is not None:
-                cur_p["status"] = "failed"
-                fid = FN_ID_RE.search(fm.group(1))
-                if fid and not cur_p["fbid"]:
-                    cur_p["fbid"] = fid.group(1)
-            sm = SLEEP_RE.search(line)
-            if sm:
-                secs = float(sm.group(1))
+                        cur_s["files"] += 1
+            if secs:
                 if cur_a is not None:
                     cur_a["sleeps"] += secs
                 if cur_s is not None:
                     cur_s["sleeps"] += secs
-                if sm.group(2) == "download" and cur_p is not None:
-                    cur_p["sleep"] += secs
             if REJECTION_RE.search(line):
                 if cur_a is not None:
                     cur_a["rejections"] += 1
@@ -596,13 +599,14 @@ def _photo_state(p, disk_fbids):
     return "interrupted"
 
 
-def _annotate_disk(t):
+def _annotate_disk(t, files=None):
     """Cross log photos with files actually on disk.
 
     Per photo: explicit 5-state (see _photo_state) + disk file info when present.
     Per album/session: `states` counters (foreign = on disk in this album's dir
     but never seen in ANY log session for this set) + on_disk + max_mtime."""
-    files = scan_downloads()["files"]
+    if files is None:
+        files = scan_downloads()["files"]
     by_fbid = {}
     disk_fbids_by_set = {}
     max_mtime_by_set = {}
@@ -681,28 +685,7 @@ def _photos_from_album_span(spans, s, a):
                    "start_off": start, "end_off": end, "status": "pending",
                    "file": None, "sleep": 0.0, "bytes": 0, "dl": False}
             photos.append(cur)
-        rm = RESP_RE.search(line)
-        if rm and cur is not None and int(rm.group(1)) < 400 and rm.group(2):
-            cur["bytes"] += int(rm.group(2))
-            if "fbcdn.net" in line:
-                cur["status"] = "downloaded"
-                cur["dl"] = True
-        dm = DOWNLOAD_RE.search(line)
-        if dm and cur is not None:
-            # filename only, not proof of download (no dl flag here)
-            cur["file"] = dm.group(1)
-            fm = FN_ID_RE.search(dm.group(1))
-            if fm and not cur["fbid"]:
-                cur["fbid"] = fm.group(1)
-        fm = FAILED_RE.search(line)
-        if fm and cur is not None:
-            cur["status"] = "failed"
-            fid = FN_ID_RE.search(fm.group(1))
-            if fid and not cur["fbid"]:
-                cur["fbid"] = fid.group(1)
-        sm = SLEEP_RE.search(line)
-        if sm and cur is not None and sm.group(2) == "download":
-            cur["sleep"] += float(sm.group(1))
+        _update_photo_node(cur, line)
         prev_end = end
     if cur is not None:
         cur["end_off"] = prev_end
@@ -718,15 +701,16 @@ def album_detail(s: int, a: int, offset: int = Query(default=0, ge=0),
         alb = t["sessions"][s]["albums"][a]
     except (IndexError, KeyError):
         raise HTTPException(404, "album not found")
-    _annotate_disk(t)  # gives alb: on_disk / states / max_mtime / per-photo state
+    files = scan_downloads()["files"]
+    _annotate_disk(t, files)  # gives alb: on_disk / states / max_mtime / per-photo state
     photos_src = alb["photos"]
     if alb.get("photos_truncated") and alb["photos_n"] > len(photos_src):
         full = _photos_from_album_span(spans, s, a)
         if full is not None:
             photos_src = full
-    by_fbid = {f["fbid"]: f for f in scan_downloads()["files"] if f.get("fbid")}
+    by_fbid = {f["fbid"]: f for f in files if f.get("fbid")}
     disk_key = "a." + alb["set_id"] if alb.get("set_id") else None
-    disk_fbids = {f["fbid"] for f in scan_downloads()["files"]
+    disk_fbids = {f["fbid"] for f in files
                   if f.get("fbid") and f.get("album_set") == disk_key} if disk_key else set()
     photos = []
     for p in photos_src[offset:offset + limit]:
@@ -814,9 +798,10 @@ def photo_logs(s: int, a: int, p: int, offset: int = Query(default=0, ge=0),
 def albums_overview():
     """Album-centric view across all sessions (set_id keyed), with retry flag."""
     t, _ = get_tree()
-    _annotate_disk(t)
+    files = scan_downloads()["files"]
+    _annotate_disk(t, files)
     by_set = {}
-    for f in scan_downloads()["files"]:
+    for f in files:
         if f.get("album_set"):
             by_set.setdefault(f["album_set"], []).append(f)
     agg = {}
@@ -1190,9 +1175,10 @@ def status():
     try:
         st = os.stat(LOG_FILE)
         return {"exists": True, "size": st.st_size, "mtime": st.st_mtime,
-                "timezone": DISPLAY_TZ}
+                "timezone": DISPLAY_TZ, "rejection_regex": REJECTION_PATTERN}
     except OSError:
-        return {"exists": False, "size": 0, "mtime": None, "timezone": DISPLAY_TZ}
+        return {"exists": False, "size": 0, "mtime": None, "timezone": DISPLAY_TZ,
+                "rejection_regex": REJECTION_PATTERN}
 
 
 _stats_cache = {"key": None, "value": None}
@@ -1284,11 +1270,11 @@ def summary():
     Line 3: errors / warnings / rejections + last activity."""
     st = stats()
     t, _ = get_tree()
-    _annotate_disk(t)
     files = scan_downloads()
+    _annotate_disk(t, files["files"])
     parsed = _read_albums_file(ALBUMS_FILE)
     started = _started_urls()
-    dirnames = _dir_names()
+    dirnames = _dir_names(files["files"])
     if parsed is not None:
         albums_total = len(parsed)
         albums_done = sum(1 for _, d in parsed if d)
@@ -1327,6 +1313,7 @@ def summary():
             wake_epoch = None
     return {
         "exists": st["exists"], "timezone": DISPLAY_TZ,
+        "rejection_regex": REJECTION_PATTERN,
         "log_size": os.path.getsize(LOG_FILE) if st["exists"] else 0,
         "lines": st["lines"], "scanned_bytes": st["scanned_bytes"],
         "truncated": st["truncated"],

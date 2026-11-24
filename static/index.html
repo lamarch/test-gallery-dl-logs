@@ -192,7 +192,7 @@ const LEVEL_RE = /^(?:\[[^\]]*\]\s*)?\[[^\]]*\]\[(debug|info|warning|error|criti
 const PROGRESS_RE = /^\[\d+\/\d+\]/;
 const TS_RE = /^\[([^\]]+)\]\s*\[([^\]]*)\]\[(\w+)\]\s?(.*)$/;
 // keep in sync with REJECTION_RE in app.py (no bare \b429\b: matches "[429/500]")
-const REJECTION_RE = /temporarily blocked|blocked from viewing|must be logged in|logged in to continue|AuthRequired|AuthorizationError|AuthenticationError|Invalid login credentials|credentials required|cookies needed|Too Many Requests|ChallengeError|captcha|FunCaptcha|GeeTest|hCaptcha|HttpError: '(?:401|403|429)|content isn't available/i;
+let REJECTION_RE = /temporarily blocked|blocked from viewing|must be logged in|logged in to continue|AuthRequired|AuthorizationError|AuthenticationError|Invalid login credentials|credentials required|cookies needed|Too Many Requests|ChallengeError|captcha|FunCaptcha|GeeTest|hCaptcha|HttpError: '(?:401|403|429)|content isn't available/i;  // boot fallback, replaced by the server's pattern on the first poll
 
 function levelOf(line) {
   const m = LEVEL_RE.exec(line);
@@ -495,6 +495,10 @@ function updateBanner(s) {
 
 // ---------------------------------------------------------------- tree view (3 lines per node)
 let treeData = null, exifStats = { by_album: {}, total: 0, scanned: 0 }, treeBooted = false, treeLoading = false;
+let treeSig = null;
+function treeSignature(t, ex) {  // only the data that is actually rendered
+  return JSON.stringify(t) + "|" + JSON.stringify(ex && ex.by_album);
+}
 // scroll preservation across live refreshes: reopened nodes load their content
 // asynchronously (photos / log spans), which grows the page AFTER the first
 // restore - so we re-apply the saved scroll when that content settles.
@@ -751,6 +755,9 @@ async function refreshTree() {
     ]);
     treeData = t;
     if (ex) exifStats = ex;
+    const sig = treeSignature(t, ex);
+    if (sig === treeSig) return;  // nothing changed: keep the DOM as is (no flicker)
+    treeSig = sig;
     renderTree();
   } catch (e) {} finally { treeLoading = false; }
 }
@@ -762,9 +769,10 @@ function renderTree() {
   const openKeys = new Set([...root.querySelectorAll("details.tnode[data-key]")]
     .filter(d => d.open).map(d => d.dataset.key));
   const scroll = view.scrollTop;
-  root.innerHTML = "";
   const lastS = t.sessions[t.sessions.length - 1];
-  for (const s of t.sessions) root.appendChild(sessionNode(s, s === lastS));
+  const frag = document.createDocumentFragment();
+  for (const s of t.sessions) frag.appendChild(sessionNode(s, s === lastS));
+  root.replaceChildren(frag);  // single swap: no intermediate empty-tree flash
   applyTreeFilter($("tree-q").value.trim().toLowerCase());
   for (const d of root.querySelectorAll("details.tnode[data-key]"))  // parents come first
     if (openKeys.has(d.dataset.key)) d.open = true;
@@ -781,7 +789,7 @@ function applyTreeFilter(q) {
 $("tree-q").addEventListener("input", () => applyTreeFilter($("tree-q").value.trim().toLowerCase()));
 
 // ---------------------------------------------------------------- albums view (3-way comparison + cards)
-let overviewData = null, compareData = null, overviewLoading = false;
+let overviewData = null, compareData = null, overviewLoading = false, overviewSig = null;
 async function refreshOverview() {
   if (overviewLoading) return;
   overviewLoading = true;
@@ -792,21 +800,22 @@ async function refreshOverview() {
     ]);
     overviewData = o;
     compareData = c;
+    const sig = JSON.stringify(o) + "|" + JSON.stringify(c);
+    if (sig === overviewSig && !pendingAlbum) return;  // unchanged: keep the DOM (no flicker)
+    overviewSig = sig;
     renderOverview();
   } catch (e) {} finally { overviewLoading = false; }
 }
 function renderCompare(cmp) {
   const el = $("albums-compare");
-  el.innerHTML = "";
-  if (!cmp) return;
+  if (!cmp) { el.replaceChildren(); return; }
   const c = cmp.counts || {};
   const h = document.createElement("h3");
   h.textContent = "Albums comparison (albums.txt × logs × disk): " +
     (c.done || 0) + " done · " + (c.incomplete || 0) + " unfinished (started, not done) · " +
     (c.not_started || 0) + " remaining (in file, never started) · " +
     (c.not_in_file || 0) + " not in file · " + (c.total || 0) + " total";
-  el.appendChild(h);
-  if (!cmp.albums || !cmp.albums.length) return;
+  if (!cmp.albums || !cmp.albums.length) { el.replaceChildren(h); return; }
   const table = document.createElement("table");
   table.className = "files-table compare-table";
   table.innerHTML = "<thead><tr>" +
@@ -834,7 +843,7 @@ function renderCompare(cmp) {
     tb.appendChild(tr);
   }
   table.appendChild(tb);
-  el.appendChild(table);
+  el.replaceChildren(h, table);  // single swap
 }
 function albumCard(a) {
   const card = document.createElement("div");
@@ -890,12 +899,16 @@ function renderOverview() {
   const scroll = view.scrollTop;
   renderCompare(compareData);
   const root = $("albums-root");
-  root.innerHTML = "";
+  const frag = document.createDocumentFragment();
   if (overviewData && overviewData.albums.length) {
-    for (const a of overviewData.albums) root.appendChild(albumCard(a));
+    for (const a of overviewData.albums) frag.appendChild(albumCard(a));
   } else {
-    root.innerHTML = "<p class='stat'>no albums parsed yet</p>";
+    const p = document.createElement("p");
+    p.className = "stat";
+    p.textContent = "no albums parsed yet";
+    frag.appendChild(p);
   }
+  root.replaceChildren(frag);  // single swap: no intermediate empty-list flash
   applyAlbumsFilter($("albums-q").value.trim().toLowerCase());
   for (const d of view.querySelectorAll("details.tnode[data-key]"))
     if (openKeys.has(d.dataset.key)) d.open = true;
@@ -1062,6 +1075,8 @@ async function poll() {
   try {
     const s = await (await fetch("/api/summary")).json();
     setTZ(s.timezone);
+    if (s.rejection_regex && REJECTION_RE.source !== s.rejection_regex)
+      REJECTION_RE = new RegExp(s.rejection_regex, "i");  // single source of truth: the server's pattern
     updateBanner(s);
     $("st-lines").textContent = s.lines + (s.truncated ? " (tail)" : "");
     $("st-warn").textContent = s.warnings;
