@@ -205,6 +205,9 @@ class ApiTests(unittest.TestCase):
         self.assertEqual(e["set_id"], SET_ID)
         self.assertEqual(e["link"],
                          f"https://www.facebook.com/media/set/?set=a.{SET_ID}&type=3")
+        # timing fields for the compare table: total span duration + last activity
+        self.assertGreater(e["total_duration_s"], 0)
+        self.assertIsNotNone(e["last_activity"])
 
     def test_albums_not_in_file(self):
         # an album dir on disk but absent from albums.txt -> not_in_file entry
@@ -270,9 +273,10 @@ class ApiTests(unittest.TestCase):
         self.assertEqual(data["downloaded"], 2)        # 2 CDN payloads (L6 + L18)
         self.assertEqual(data["albums"], {"available": True, "total": 3, "done": 1,
                                           "unfinished": 1, "remaining": 1})
-        # global 5-state counters: full / already / missing / foreign
+        # global counters: 5-state + downloaded (CDN payload seen in logs)
         self.assertEqual(data["states"],
-                         {"full": 1, "already": 2, "missing": 1, "foreign": 1})
+                         {"full": 1, "downloaded": 2, "already": 2, "missing": 1,
+                          "foreign": 1})
         self.assertEqual(data["current_album"], SET_URL)
         self.assertEqual(data["current_album_set"], SET_ID)
         self.assertEqual(data["current_album_name"], "Vacances 2025")
@@ -355,11 +359,12 @@ class TreeApiTests(unittest.TestCase):
         self.assertEqual(a0["on_disk"], 4)                # log-vs-disk annotation (4 files in dir)
         self.assertEqual(a0["missing_on_disk"], 0)        # its only photo is on disk
         # full = on disk AND CDN payload in logs; foreign = on disk, never in logs
-        self.assertEqual(a0["states"], {"full": 1, "foreign": 1})
+        self.assertEqual(a0["states"], {"full": 1, "downloaded": 1, "foreign": 1})
         a1t = s1["albums"][0]
         self.assertEqual(a1t["missing_on_disk"], 1)       # fbid ...083626912 downloaded in s1, not on disk
         # failed-but-on-disk and pending-but-on-disk -> already; downloaded-not-on-disk -> missing
-        self.assertEqual(a1t["states"], {"already": 2, "missing": 1, "foreign": 1})
+        self.assertEqual(a1t["states"],
+                         {"downloaded": 1, "already": 2, "missing": 1, "foreign": 1})
         self.assertEqual(a0["photos_n"], 1)
         self.assertEqual(a0["files"], 1)
         self.assertEqual(a0["bytes"], 392546)
@@ -403,7 +408,7 @@ class TreeApiTests(unittest.TestCase):
         self.assertEqual(d["photos_n"], 1)
         self.assertEqual(len(d["photos"]), 1)
         self.assertEqual(d["on_disk"], 4)
-        self.assertEqual(d["states"], {"full": 1, "foreign": 1})
+        self.assertEqual(d["states"], {"full": 1, "downloaded": 1, "foreign": 1})
         self.assertEqual(d["missing_on_disk"], [])        # s0's photo is on disk
         d1 = self.client.get("/api/album/1/0").json()
         self.assertEqual(d1["missing_on_disk"], ["29493523083626912"])  # downloaded, not on disk
@@ -417,7 +422,8 @@ class TreeApiTests(unittest.TestCase):
         # downloaded in log (CDN payload) but not on disk -> missing
         self.assertEqual(by_fbid["29493523083626912"]["state"], "missing")
         self.assertTrue(by_fbid["29493523083626912"]["dl"])
-        self.assertEqual(d1["states"], {"already": 2, "missing": 1, "foreign": 1})
+        self.assertEqual(d1["states"],
+                         {"downloaded": 1, "already": 2, "missing": 1, "foreign": 1})
         p = d["photos"][0]
         self.assertTrue(p["on_disk"])
         self.assertEqual(p["path"], SYNCED_REL)
@@ -519,7 +525,8 @@ class TreeApiTests(unittest.TestCase):
         self.assertEqual(a["on_disk"], 4)
         self.assertEqual(a["missing_on_disk"], 1)  # downloaded in log, not on disk
         self.assertEqual(a["extra_on_disk"], 3)    # on disk, not downloaded in log
-        self.assertEqual(a["states"], {"full": 1, "already": 2, "missing": 1, "foreign": 1})
+        self.assertEqual(a["states"], {"full": 1, "downloaded": 2, "already": 2,
+                                      "missing": 1, "foreign": 1})
         self.assertEqual(a["link"], f"https://www.facebook.com/media/set/?set=a.{SET_ID}&type=3")
 
 
